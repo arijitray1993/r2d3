@@ -59,12 +59,14 @@ class GenericModule():
         logger = None, # expects a wandb run object
         exp_name = "",
         eval_only = False,
+        num_eval_steps = 5,
     ):
         super().__init__()
         self.model = model
         self.logger = logger
         self.exp_name = exp_name
         self.eval_only = eval_only
+        self.num_eval_steps = num_eval_steps
 
         # initialize eval functions and metrics
         self.metrics = metrics
@@ -173,7 +175,7 @@ class GenericModule():
             progress_bar.set_description(f"")
             progress_bar.update(1)
             count+=1
-            if count>100:
+            if count>self.num_eval_steps:
                 break
         
         # compute metrics after running all eval loop
@@ -307,6 +309,7 @@ def main(cfg: DictConfig):
             logger = run,
             exp_name = cfg.exp_name,
             eval_only = cfg.eval_only,
+            num_eval_steps = cfg.num_eval_steps,
         )
 
     else:
@@ -338,6 +341,7 @@ def main(cfg: DictConfig):
             logger = run,
             exp_name = cfg.exp_name,
             eval_only = cfg.eval_only,
+            num_eval_steps = cfg.num_eval_steps,
         )
 
     if cfg.eval_only:

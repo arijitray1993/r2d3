@@ -1,4 +1,4 @@
-exp_name: llava_exp0
+exp_name: llava_incomplete_summaryonly
 device: 'gpu'
 num_devices: 1
 num_workers: 2
@@ -13,37 +13,40 @@ eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: checkpoints/llava_exp0/magic-sea-77_11000 # checkpoints/charmed-aardvark-58_llava_exp0 # checkpoints/fresh-fog-53_llava_exp0 
+lora_model_path: checkpoints/llava_incomplete_summaryonly/usual-feather-3_14000
 
 eval_every: 2000
 num_eval_steps: 100
 no_shuffle: False
 
-train_dataset_choice: "ProcTHOR_Program_image"
+train_dataset_choice: "ProcTHOR_image_caption"
 train_dataset_args: {
   split: "train",
   model: "llava",
   model_path: liuhaotian/llava-v1.5-7b,
-  tile_images: True
+  tile_images: True,
+  summary_only: True
 }
 train_collate_fn: "collate_fn"
  
 ## define your valtrain dataset, the name must match the class name in datasets/dataloaders.py. This is run during training to help choose best checkpoint
-valtrain_dataset_choice:  "ProcTHOR_Program_image"
+valtrain_dataset_choice:  "ProcTHOR_image_caption"
 valtrain_dataset_args: {
   split: "val",
   model: "llava",
   model_path: liuhaotian/llava-v1.5-7b,
-  tile_images: True
+  tile_images: True,
+  summary_only: True
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "ProcTHOR_Program_image"
+val_dataset_choice: "ProcTHOR_image_caption"
 val_dataset_args: {
   split: "val",
   model: "llava",
   model_path: liuhaotian/llava-v1.5-7b,
-  tile_images: True
+  tile_images: True,
+  summary_only: True
 }
 val_collate_fn: "collate_fn" 
 # The dataset __getitem__ must return a dictionary.
@@ -71,6 +74,6 @@ losses: []
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], ['model_outputs[scores]', 'data_batch[labels]']],
+  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
   ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []]
 ]

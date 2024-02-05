@@ -9,13 +9,14 @@ batch_size: 1
 lr: 0.00001
 weight_decay: 0.0001
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: False # checkpoints/llava_incomplete_im_caption/distinctive-gorge-19_20000
+lora_model_path: checkpoints/llava_incomplete_captiononly/vocal-capybara-2_20000
 
 eval_every: 2000
+num_eval_steps: 100
 no_shuffle: False
 
 train_dataset_choice: "ProcTHOR_image_caption"

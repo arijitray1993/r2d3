@@ -105,7 +105,12 @@ class HouseSemanticSimilarity:
             while(True):
                 if f'obj_{i}' not in pred_house:
                     break
-                pred_object, location, rotation = pred_house[f'obj_{i}']
+                try:
+                    pred_object, location, rotation = pred_house[f'obj_{i}']
+                except:
+                    print("error object")
+                    i+=1
+                    continue
                 pred_objs[pred_object].append((location, rotation))
                 i+=1
 
@@ -180,7 +185,11 @@ class HouseJsonSimilarity:
         os.makedirs(os.path.join(self.exp_folder, "vis"), exist_ok=True)
         
         for i, image_list in enumerate(self.gt_images):
-            images = [Image.open(image_path) for image_path in image_list]
+            # check if image is pil or file path
+            if isinstance(image_list[0], str):
+                image_list = [Image.open(image_path) for image_path in image_list]
+            else:
+                images = image_list
             
             # Calculate total width and maximum height
             total_width = sum(image.width for image in images)

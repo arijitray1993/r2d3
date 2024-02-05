@@ -4,57 +4,66 @@ import json
 
 import yaml
 import ast
+import pdb
+import numpy as np
 
-def tokenize_polygon(polygon):
+def tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z):
     # get the tokens for the x,y,z coordinates of the polygon
+    # normalized by max length
     tokens = []
+    '''
     for point in polygon:
-        token_x = int(point['x']/8*31)
-        token_y = int(point['y']/8*31)
-        token_z = int(point['z']/8*31)
+        token_x = int(point['x']/max_dim_x*256)
+        token_y = int(point['y']/max_dim_y*256)
+        token_z = int(point['z']/max_dim_z*256)
         tokens.append((token_x, token_y, token_z))
-    
+    '''
+    for point in polygon:
+        
+        tokens.append((point['x'], point['y'], point['z']))
     return tokens
 
-def get_token_from_coordinate(x,y,z):
+def get_token_from_coordinate(x,y,z, max_dim_x, max_dim_y, max_dim_z):
     # 32 tokens represent 0 to 8. Convert 0-8 for x, y, z to 0-31 tokens
 
     # get the number from the token
-    token_x = int(x/8*31)
-    token_y = int(y/8*31)
-    token_z = int(z/8*31)
+    '''
+    token_x = int((x/max_dim_x)*256)
+    token_y = int((y/max_dim_y)*256)
+    token_z = int((z/max_dim_z)*256)
+    '''
 
-    return token_x, token_y, token_z
+    return x, y, z
 
 def get_token_from_rotation(x,y,z):
-    # 360 tokens represent 0 to 360. Convert 0-360 for x, y, z to 0-359 tokens
+    # 360 tokens represent 0 to 359. Convert 0-359 for x, y, z to 0-359 tokens
 
     # get the number from the token
-    token_x = int(x/360*359)
-    token_y = int(y/360*359)
-    token_z = int(z/360*359)
+    token_x = int(x)
+    token_y = int(y)
+    token_z = int(z)
 
     return token_x, token_y, token_z
 
-def get_coordinate_from_token(token):
+def get_coordinate_from_token(token, max_dim):
     # 32 tokens represent 0 to 8. Convert 0-31 to 0-8
 
     # get the number from the token
-    num = int(token)
+    #num = int(token)
 
     # now get corrdinate
-    coordinate = num/31*8
+    #coordinate = (num/31)*max_dim
 
-    return coordinate
+    return token #coordinate
 
 def get_rotation_from_token(token):
-    # 360 tokens represent 0 to 360. Convert 0-359 to 0-360
+    # 360 tokens represent 0 to 359. Convert 0-359 to 0-359
 
     # get the number from the token
     num = int(token)
 
     # now get rotation
-    rotation = num/359*360
+    rotation = num
 
     return rotation
 
@@ -64,37 +73,175 @@ def get_rotation_from_tokens(token_x, token_y, token_z):
     y = get_rotation_from_token(token_y)
     z = get_rotation_from_token(token_z)
 
-    return {"x": x, "y": y, "z": z}
+    return {"x": x, "y": y, "z": z} 
 
-def get_xyz_from_tokens(token_x, token_y, token_z):
+def get_xyz_from_tokens(token_x, token_y, token_z, max_dim_x, max_dim_y, max_dim_z):
 
     # get the x,y,z coordinates from the tokens
-    x = get_coordinate_from_token(token_x)
-    y = get_coordinate_from_token(token_y)
-    z = get_coordinate_from_token(token_z)
+    #x = get_coordinate_from_token(token_x, max_dim_x)
+    #y = get_coordinate_from_token(token_y, max_dim_y)
+    #z = get_coordinate_from_token(token_z, max_dim_z)
 
+    x = token_x
+    y = token_y
+    z = token_z
     return {"x": x, "y": y, "z": z}
+
+def get_polygon_from_polygon_tokens(polygon_tokens, max_dim_x, max_dim_y, max_dim_z):
+    # get the polygon from the tokens
+    polygon = []
+    for token in polygon_tokens:
+        x = get_coordinate_from_token(token[0], max_dim_x)
+        y = get_coordinate_from_token(token[1], max_dim_y)
+        z = get_coordinate_from_token(token[2], max_dim_z)
+        polygon.append({"x": x, "y": y, "z": z})
+
+    return polygon
+
+def Random_Points_in_Polygon(polygon, number):
+    points = []
+    minx, miny, maxx, maxy = polygon.bounds
+    while len(points) < number:
+        pnt = Point(np.random.uniform(minx, maxx), np.random.uniform(miny, maxy))
+        if polygon.contains(pnt):
+            points.append(pnt)
+    return points
+
+def generate_room_programs_from_house_json(house_json):
+    # note that this takes an entire house json (og json from ai2thor), and makes a room program and a json just for that room.
+
+    num_rooms = len(house_json['rooms'])
+
+    room_programs = []
+    for i in range(num_rooms):
+        room_id = house_json['rooms'][i]['id']
+        # get polygon
+        polygon = house_json['rooms'][i]['floorPolygon']
+
+        # get max dimensions
+        max_dim_x = max([point['x'] for point in polygon])
+
+        # max y_dim from wall height
+        max_dim_y = 0
+        for wall in house_json['walls']:
+            for point in wall['polygon']:
+                if point['y'] > max_dim_y:
+                    max_dim_y = point['y']
+        
+        max_dim_z = max([point['z'] for point in polygon])
+
+        # pdb.set_trace()
+        # get floor material
+        floor_material = house_json['rooms'][i]['floorMaterial']['name']
+
+        # get wall materials
+        wall_materials = []
+        wall_id_to_programid = {}
+        for wall in house_json['walls']:
+            if wall['roomId'] == room_id:
+                wall_materials.append(wall['material']['name'])
+                wall_id_to_programid[wall['id']] = len(wall_materials)-1
+        
+        # tokenize polygon, floor material, and wall materials
+        polygon_tokens = tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z)
+        # pdb.set_trace()
+        floor_material_token = floor_material
+        wall_material_tokens = wall_materials
+
+        # get objects
+        shapely_polygon = Polygon([(room_point['x'], room_point['z']) for room_point in polygon])
+        objects = []
+        for obj in house_json['objects']:
+            # use shapely polygon to check if the object is inside the room
+            point = Point(obj['position']['x'], obj['position']['z'])
+            if shapely_polygon.contains(point):
+                objects.append(obj)
+        
+        # get windows
+        windows=[]
+        for ind, window in enumerate(house_json['windows']):
+            if window['room0'] != room_id:
+                continue
+            window_token = window['assetId']
+            window_position = get_token_from_coordinate(window['assetPosition']['x'], window['assetPosition']['y'], window['assetPosition']['z'], max_dim_x, max_dim_y, max_dim_z)
+            window_polygon = tokenize_polygon(window['holePolygon'], max_dim_x, max_dim_y, max_dim_z)
+            window_wall = wall_id_to_programid[window['wall0']]
+
+            # find the window wall in program text
+            # window_wall_program_id = wall_id_to_programid[window_wall]
+            program_window_entry = (window_token, window_position, window_polygon, window_wall)
+            windows.append(program_window_entry)
+        
+        # make a program
+        program_text = f"""
+max_dims: [{max_dim_x}, {max_dim_y}, {max_dim_z}]
+polygon: {polygon_tokens}
+floor_material: '{floor_material_token}'
+wall_material: {wall_material_tokens}
+"""
+        for ind, obj in enumerate(objects):
+            obj_token = obj['assetId']
+            obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+            obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'])
+            obj_id = obj['id']
+            # pdb.set_trace()
+            obj_entry_dict = (obj_token, obj_position, obj_rotation)
+            program_text += f"\nobj_{ind}: {obj_entry_dict}"
+            
+            if 'children' in obj:
+                for child_ind, child in enumerate(obj['children']):
+                    child_token = child['assetId']
+                    child_position = get_token_from_coordinate(child['position']['x'], child['position']['y'], child['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+                    child_rotation = get_token_from_rotation(child['rotation']['x'], child['rotation']['y'], child['rotation']['z'])
+                    child_id = child['id']
+                    child_parent_id = obj_id
+                    child_entry_dict = (child_token, child_position, child_rotation, child_parent_id)
+                    program_text += f"\nchild_{child_ind}: {child_entry_dict}"
+
+        for ind, window in enumerate(windows):
+            program_text += f"\nwindow_{ind}: {window}"
+
+        #### actually execute the program text to get the house json
+        program_text = program_text.replace("(", "[")
+        program_text = program_text.replace(")", "]")
+        room_json = make_house_from_cfg(program_text)
+        # pdb.set_trace()
+        room_programs.append((program_text, room_json.house_json, house_json))
+
+    return room_programs
 
 
 def generate_program_from_roomjson(house_json):
+    #DEPRECATED!!!
+    # this takes the json of just a room and make a program for the room.
     # for each room, we need polygon, floor material, wall materials, and objects at location and rotation
-
-    
+    print("DEPRECATED!!!")
     room_id = house_json['rooms'][0]['id']
     # get polygon
     polygon = house_json['rooms'][0]['floorPolygon']
+
+    # get max dimensions
+    max_dim_x = max([point['x'] for point in polygon])
+    # max y_dim from wall height
+    max_dim_y = 0
+    for wall in house_json['walls']:
+        if wall['roomId'] == room_id:
+            if wall['polygon'][0]['y'] > max_dim_y:
+                max_dim_y = wall['polygon'][0]['y']
+    max_dim_z = max([point['z'] for point in polygon])
 
     # get floor material
     floor_material = house_json['rooms'][0]['floorMaterial']['name']
 
     # get wall materials
     wall_materials = []
+    wall_id_to_programid = {}
     for wall in house_json['walls']:
-        if wall['roomId'] == room_id:
-            wall_materials.append(wall['material']['name'])
-    
+        wall_materials.append(wall['material']['name'])
+        wall_id_to_programid[wall['id']] = len(wall_materials)-1
+    # pdb.set_trace()
     # tokenize polygon, floor material, and wall materials
-    polygon_tokens = tokenize_polygon(polygon)
+    polygon_tokens = tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z)
     floor_material_token = floor_material
     wall_material_tokens = wall_materials
 
@@ -114,10 +261,29 @@ polygon: {polygon_tokens}
 floor_material: {floor_material_token}
 wall_material: {wall_material_tokens}
 """
+
+    # add windows
+    for ind, window in enumerate(house_json['windows']):
+        if window['roomId'] != room_id:
+            continue
+        window_token = window['assetId']
+        window_position = get_token_from_coordinate(window['assetPosition']['x'], window['assetPosition']['y'], window['assetPosition']['z'], max_dim_x, max_dim_y, max_dim_z)
+        window_polygon = tokenize_polygon(window['holePolygon'], max_dim_x, max_dim_y, max_dim_z)
+        window_wall = str(wall_id_to_programid[window['wall0']])
+
+        # find the window wall in program text
+        # window_wall_program_id = wall_id_to_programid[window_wall]
+        program_window_entry = (window_token, window_position, window_polygon, window_wall)
+
+        program_text += f"""
+window_{ind}: {program_window_entry}
+"""
+
+    # add objects
     for ind, obj in enumerate(objects):
         obj_token = obj['assetId']
-        obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'])
-        obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'])
+        obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+        obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'], max_dim_x, max_dim_y, max_dim_z)
         obj_id = obj['id']
 
         obj_entry_dict = (obj_token, obj_position, obj_rotation)
@@ -130,12 +296,15 @@ obj_{ind}: {obj_entry_dict}
 
 class House:
 
-    def __init__(self, args={}, house_json=""):
+    def __init__(self, args={}, house_json="", max_dim_x=8, max_dim_y=8, max_dim_z=8):
         if house_json == "":
             self.house_json = self.generate_house_template()
         else:
             self.house_json = house_json
         
+        self.max_dim_x = max_dim_x
+        self.max_dim_y = max_dim_y
+        self.max_dim_z = max_dim_z
         #self.object_choices = json.load(open("all_objects.json", "r"))
         #self.wall_material_choices = json.load(open("all_wall_materials.json", "r"))
         #self.room_type_choices = json.load(open("all_room_types.json", "r"))
@@ -333,8 +502,7 @@ class House:
                 "floorMaterial": {
                     "name": ""
                 },
-                "floorPolygon": [
-                    
+                "floorPolygon": [                    
                 ],
                 "id": "",
                 "roomType": ""
@@ -349,14 +517,14 @@ class House:
     def make_floorplan_walls(self, args):
         '''
         expects keys:
-        - polygon: list of x,y,z coordinates that join to make a polygon
-        - floor_material
-        - wall_material: list of wall materials for each wall (number of edges in polygon)
+            - polygon: list of x,y,z coordinates that join to make a polygon
+            - floor_material
+            - wall_material: list of wall materials for each wall (number of edges in polygon)
         '''
         polygon = args['polygon']
         floor_material = args['floor_material']
 
-        polygon = [get_xyz_from_tokens(token_x, token_y, token_z) for token_x, token_y, token_z in polygon]
+        polygon = [get_xyz_from_tokens(token_x, token_y, token_z, self.max_dim_x, self.max_dim_y, self.max_dim_z) for token_x, token_y, token_z in polygon]
         
         self.house_json['rooms'][0]['floorPolygon'] = polygon
         self.house_json['rooms'][0]['floorMaterial']['name'] = floor_material
@@ -366,9 +534,9 @@ class House:
         walls = []
         for i in range(len(polygon)):
             wall_height_point_1 = polygon[i].copy()
-            wall_height_point_1['y'] = 4.551928794929904
+            wall_height_point_1['y'] = self.max_dim_y
             wall_height_point_2 = polygon[(i+1)%len(polygon)].copy()
-            wall_height_point_2['y'] = 4.551928794929904
+            wall_height_point_2['y'] = self.max_dim_y
 
             wall = {
                 "id": i,
@@ -404,16 +572,33 @@ class House:
         self.house_json['walls'] = walls
 
         # fix the agent position based on the floor ploygon to make sure it is inside the room
-        self.house_json['metadata']['agent']['position']['x'] = polygon[0]['x']+1
-        self.house_json['metadata']['agent']['position']['z'] = polygon[0]['z']+1
+        room_polygon = Polygon([(point['x'], point['z']) for point in polygon])
+        reachable_positions = Random_Points_in_Polygon(room_polygon, 1)
+
+        self.house_json['metadata']['agent']['position']['x'] = reachable_positions[0].x
+        self.house_json['metadata']['agent']['position']['z'] = reachable_positions[0].y
         for entry in self.house_json['metadata']['agentPoses']:
-            self.house_json['metadata']['agentPoses'][entry]['position']['x'] = polygon[0]['x']+1
-            self.house_json['metadata']['agentPoses'][entry]['position']['z'] = polygon[0]['z']+1
+            self.house_json['metadata']['agentPoses'][entry]['position']['x'] = reachable_positions[0].x
+            self.house_json['metadata']['agentPoses'][entry]['position']['z'] = reachable_positions[0].y
 
         # fix the light position based on the floor ploygon to make sure it is inside the room
-        self.house_json['proceduralParameters']['lights'][1]['position']['x'] = polygon[0]['x']+1
-        self.house_json['proceduralParameters']['lights'][1]['position']['z'] = polygon[0]['z']+1
+        self.house_json['proceduralParameters']['lights'][1]['position']['x'] = reachable_positions[0].x
+        self.house_json['proceduralParameters']['lights'][1]['position']['y'] = self.max_dim_y - 0.3
+        self.house_json['proceduralParameters']['lights'][1]['position']['z'] = reachable_positions[0].y
 
+    def add_window(self, args):
+
+        window = {
+            'assetId': args['assetId'],
+            'assetPosition': get_xyz_from_tokens(*args['position'], self.max_dim_x, self.max_dim_y, self.max_dim_z),
+            'holePolygon': get_polygon_from_polygon_tokens(args['windowPolygon'], self.max_dim_x, self.max_dim_y, self.max_dim_z),
+            'id': args['id'],
+            'room0': "room_0",
+            'room1': "room_0",
+            'wall0': args['wall'],
+            'wall1': args['wall_exterior']
+        }
+        self.house_json['windows'].append(window)
 
     def add_object(self, args):
         '''
@@ -424,9 +609,13 @@ class House:
         '''
         obj = {
             "assetId": args['assetId'],
-            "position": get_xyz_from_tokens(*args['position']),
+            "position": get_xyz_from_tokens(*args['position'], self.max_dim_x, self.max_dim_y, self.max_dim_z),
             "rotation": get_rotation_from_tokens(*args['rotation']),
             "id": args['id'],
+            "kinematic": True,
+            "layer": '',
+            "material": None,
+            "children": []
         }
         self.house_json['objects'].append(obj)
 
@@ -443,7 +632,7 @@ class House:
         child = args
         child_obj = {
             "assetId": child['assetId'],
-            "position": get_xyz_from_tokens(*child['position']),
+            "position": get_xyz_from_tokens(*child['position'], self.max_dim_x, self.max_dim_y, self.max_dim_z),
             "rotation": get_rotation_from_tokens(*child['rotation']),
             "id": child['id'],
             "parent_id": child['parent_id']
@@ -463,29 +652,51 @@ class House:
 def make_house_from_cfg(cfg):
     '''
     cfg is a string like:
+    max_dims: [8, 8, 8]
     polygon: [[0, 0, 0], [0, 0, 15], [15, 0, 15], [15, 0, 0]] # note there are no parantheses, only square brackets
     floor_material: LightWoodCounters3
     wall_material: ['PureWhite', 'PureWhite', 'PureWhite', 'PureWhite']
-
+    window_0: ['Window_Fixed_60x48', [1,1,1], [[0, 0, 0], [0, 0, 15]], 0]  # asset_id, position, polygon, wall_id
     obj_0: ['Toilet_2', [1, 1, 1], [0, 0, 0]]
-
     obj_1: ['Sink_26', [5, 1, 1], [0, 0, 0]]
+
+    outputs a room (not a house really) json that can be used with the Controller in AI2thor. 
     '''
 
     # get dictionary from yaml-like string
     cfg_dict = yaml.load(cfg, Loader=yaml.FullLoader)
 
+    #get max dimensions
+    max_dim_x, max_dim_y, max_dim_z = cfg_dict['max_dims']
     floor_polygon = cfg_dict['polygon']
     floor_material = cfg_dict['floor_material']
     wall_material = cfg_dict['wall_material']
 
     # make house
-    house = House()
+    house = House(max_dim_x=max_dim_x, max_dim_y=max_dim_y, max_dim_z=max_dim_z)
     house.make_floorplan_walls({
         'polygon': floor_polygon,
         'floor_material': floor_material,
         'wall_material': wall_material
     })
+
+    # make windows
+    i = 0
+    while(True):
+        if f'window_{i}' in cfg_dict:
+            window = cfg_dict[f'window_{i}']
+            house.add_window({
+                'assetId': window[0],
+                'position': window[1],
+                'windowPolygon': window[2],
+                'id': f'window_{i}',
+                'wall': window[3],
+                'wall_exterior': f'exterior_{window[3]}'
+            })
+            i += 1
+        else:
+            break
+    # print(f"made {i} windows")
 
     # get obj0, obj1, ... until we run out of objects in dict
     i = 0
@@ -502,5 +713,22 @@ def make_house_from_cfg(cfg):
             i += 1
         else:
             break
-    
+    # print(f"made {i} objects")
+
+    # get child0, child1, ... until we run out of children in dict
+    i = 0
+    while(True):
+        if f'child_{i}' in cfg_dict:
+            child = cfg_dict[f'child_{i}']
+            house.add_object_children({
+                'assetId': child[0],
+                'position': list(child[1]),
+                'rotation': list(child[2]),
+                'id': f'child_{i}',
+                'parent_id': child[3]
+            })
+            i += 1
+        else:
+            break
+
     return house

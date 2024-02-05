@@ -108,7 +108,7 @@ if __name__=="__main__":
 
         # generate a summary caption for each room based on the captions of the various views. 
         all_room_summaries = []
-        for program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions in room_image_caption_data:
+        for program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions in tqdm.tqdm(room_image_caption_data):
             
             prompt = f"Can you generate a short summary caption of the room based on these descriptions of images taken from various viewpoints in the room?"
             all_view_point_captions = "\n".join(all_room_captions)
@@ -117,6 +117,8 @@ if __name__=="__main__":
 
             caption = caption_image(os.path.join("/projectnb/ivc-ml/array/research/robotics/ProcTHOR", all_imgs[0]), prompt)
 
+            # pdb.set_trace()
+
             all_room_summaries.append((program_text, house_json, caption))
         
-        json.dump(all_room_summaries, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_summaries_gtobjonly.json", "w"))
+            json.dump(all_room_summaries, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_summaries_gtobjonly.json", "w"))

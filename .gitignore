@@ -6,6 +6,7 @@
 *.exe
 *.o
 *.so
+*.pyc
 
 # Packages #
 ############
@@ -42,5 +43,5 @@ outputs/
 wandb/
 models/MiniGPT-4/
 custom_datasets/alfred
-custom_datasets/procTHOR
+custom_datasets/procThor
 custom_datasets/replicaCAD

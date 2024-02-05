@@ -16,6 +16,7 @@ load_checkpoint: False
 lora_model_path: checkpoints/llava_incomplete_im_caption/distinctive-gorge-19_20000
 
 eval_every: 2000
+num_eval_steps: 100
 no_shuffle: False
 
 train_dataset_choice: "ProcTHOR_image_caption"

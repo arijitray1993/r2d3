@@ -29,28 +29,43 @@ def generate_output_houses(json_path):
     response_rooms = [out_text.split("\n Answer: \n")[-1] for out_text in output_json]
     
     for room_ind, room_response in enumerate(response_rooms):
-        room_json_text = "\n".join(room_response.split("\n")[:-1])
-        room_json_text = room_json_text.replace("(", "[")
-        room_json_text = room_json_text.replace(")", "]")
+        room_cfg_text = "\n".join(room_response.split("\n")[:-1])
+        room_cfg_text = room_cfg_text.replace("(", "[")
+        room_cfg_text = room_cfg_text.replace(")", "]")
 
         # pdb.set_trace()
         try:
-            house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
+            house_json = ai2thor_utils.make_house_from_cfg(room_cfg_text)
         except:
             print("no room json found")
             continue
-        controller = Controller(scene=house_json.house_json, width=800,height=800)
-        
-        controller.step(dict(action='Initialize'))
+
+        try:
+            controller = Controller(scene=house_json.house_json, width=800,height=800)
+        except:
+            print("Cannot render environment")
+            continue
+
+        try:
+            controller.step(dict(action='Initialize'))
+        except:
+            print("Cannot initialize environment")
+            continue
 
         img = Image.fromarray(controller.last_event.frame)
-        img.save(f"vis/example_{room_ind}.png")
+
+        exp_path = "/".join(json_path.split("/")[:-1])
+        os.makedirs(f"{exp_path}/vis", exist_ok=True)
+
+        im_path = os.path.join(exp_path, "vis", f"example_{room_ind}.png")
+
+        img.save(im_path)
 
 
 
 if __name__=="__main__":
-    
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_exp0/output.json")
+
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_imonly_lsunbedroom/output.json")
 
     playground = False
     if playground:

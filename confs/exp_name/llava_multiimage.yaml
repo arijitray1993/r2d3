@@ -1,4 +1,4 @@
-exp_name: llava_exp0
+exp_name: llava_multiimage
 device: 'gpu'
 num_devices: 1
 num_workers: 2
@@ -67,8 +67,8 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
 # The model outputs can be accessed by model_outputs[key]. The key is the ykey you defined in the dictionary output of the model forward
 # The dataloader outputs (say the GT label) can be accessed similary in data_batch[] dictionary
 
-losses: [] 
- 
+losses: []
+
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
 #  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], ['model_outputs[scores]', 'data_batch[labels]']],
