@@ -46,24 +46,34 @@ def get_top_down_frame(controller):
 
 def render_room_program_images(program_json_data_path, image_save_folder="", load_progress=True):
 
-        print("length of already done data", len(os.listdir(image_save_folder)))
+        # print("length of already done data", len(os.listdir(image_save_folder)))
         # pdb.set_trace()
         program_json_data = json.load(open(program_json_data_path))
         #except:
 
-        done_inds = [int(im_ind.split(".")[0].split("_")[1]) for im_ind in os.listdir(image_save_folder)]
+        done_inds = []
+        for im_file in os.listdir(image_save_folder):
+            im_ind = int(im_file.split(".")[0].split("_")[1])
+            if im_ind < 9500:
+                continue
+            done_inds.append(im_ind)
+
         if len(done_inds) == 0:
-            max_ind = 0
+            max_ind = 9500
         else:
             max_ind = max(done_inds)
 
+        print("starting from index", max_ind)
+
         if load_progress:
-            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json"))
+            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_split2.json"))
         else:
             image_program_json_data = []
         
         for ind, (program_text, house_json, og_house_json) in enumerate(tqdm.tqdm(program_json_data)):
-
+            
+            if ind<9500:
+                continue
             # if we have to continue from a certain index
             if load_progress:
                 if ind < max_ind: # len(image_program_json_data):
@@ -111,7 +121,6 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
             # if outside, compute the 180-angle. 
 
             shape_polygon = Polygon(corner_positions)
-
             # make a mapping to obj id to obj name
             obj_id_to_name = {}
             for obj in house_json['objects']:
@@ -197,24 +206,11 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 cam_ind_to_position[corner_ind] = (position, rotation)
                 all_imgs.append(f"{image_save_folder}/example_{ind}_{corner_ind}.png")
 
-                ''' this suddenly stopped working in ai2thor
-                objects = []
-                for key in controller.last_event.instance_detections2D:
-                    objects.append((key.split("|")[0], controller.last_event.instance_detections2D[key]))
-                
-                all_objs.append(objects)
-                '''
                 ## a hacky way to get objects in the room
                 segmentation_frame = controller.last_event.instance_segmentation_frame
                 all_colors = segmentation_frame.reshape(-1, 3)
                 unique_colors = set([tuple(color) for color in all_colors])
                 color_to_obj = event.color_to_object_id
-
-                color_to_objid = {} # a new one to save since keys can't be tuple when saving json
-                for keys in color_to_obj:
-                    color_to_objid[str(keys)] = color_to_obj[keys]
-
-                # pdb.set_trace()
 
                 objs = []
                 for color in unique_colors:
@@ -239,7 +235,8 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 # pdb.set_trace()
 
 
-            image_program_json_data.append((program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name))
+            image_program_json_data.append((program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames))
+
             # save image of top down view
             '''
             try:
@@ -248,8 +245,8 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
             except:
                 print("couldnt get top down frame")
             '''
-            #pdb.set_trace()
-            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json", "w"))
+
+            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_split2.json", "w"))
             controller.stop()
 
 

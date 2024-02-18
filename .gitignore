@@ -45,3 +45,6 @@ models/MiniGPT-4/
 custom_datasets/alfred
 custom_datasets/procThor
 custom_datasets/replicaCAD
+scripts/test_gt_gen.json
+scripts/*.png
+scripts/vis/*.png

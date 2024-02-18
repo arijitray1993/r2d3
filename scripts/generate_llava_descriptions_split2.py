@@ -40,9 +40,10 @@ def caption_image(image_file, prompt):
     stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
     keywords = [stop_str]
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+    # pdb.set_trace()
     with torch.inference_mode():
       output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=0.2, 
-                                  max_new_tokens=700, use_cache=True, stopping_criteria=[stopping_criteria])
+                                  max_new_tokens=1024, use_cache=True, stopping_criteria=[stopping_criteria])
     outputs = tokenizer.decode(output_ids[0, input_ids.shape[1]:]).strip()
     conv.messages[-1][-1] = outputs
     output = outputs.rsplit('</s>', 1)[0]
@@ -53,6 +54,8 @@ if __name__=="__main__":
     # run choice
     caption_individual = True
     generate_summary = False
+
+    image_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/vis/ai2thor_windowadded/train"
 
     model_path = "4bit/llava-v1.5-13b-3GB"
     kwargs = {"device_map": "auto"}
@@ -74,44 +77,32 @@ if __name__=="__main__":
 
     if caption_individual:
         # load the ai2thor apartments, images, and objects dataset
-        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json", "r"))
+        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_split2.json", "r"))
 
-        # all_house_caption_data = []
-        all_house_caption_data = json.load(open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly.json", "r"))
-        start_ind = len(all_house_caption_data)
-        for ind, (program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_ims, color_to_objid, obj_id_to_name) in enumerate(tqdm.tqdm(image_program_json_data)):
-            if ind < start_ind:
-                continue
+        all_house_caption_data = []
+        for program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs in tqdm.tqdm(image_program_json_data):
+            
             all_room_captions = []
-            for img, seg_im, objs in zip(all_imgs, all_seg_ims, all_objs):
+            for img, objs in zip(all_imgs, all_objs):
                 
                 # use llava to generate a caption for the image given the objects in it
                 # first we need to design the right prompt
-                object_names = []
-                for obj in objs:
-                    obj_format = " ".join(obj.split(" ")[:-1])
-                    if obj_format == "":
-                        continue
-                    object_names.append(obj_format)
 
-                if len(object_names) < 2:
-                    continue
+                object_names = [obj[0] for obj in objs]
 
-                object_names = list(set(object_names))
+                obj_prompt = f"The image in view contains only these objects: {', '.join(object_names)}. So please only use these objects in your description if you need to and not any other objects."
 
-                obj_prompt = f"The image in view contains these objects: {', '.join(object_names)}. So please only use these objects in your description."
+                prompt = f"Can you please write a caption describing how the room looks like and feels like based on this image? {obj_prompt} "
 
-                prompt = f"Can you please write a caption describing how the room looks like - the objects and how many, the shape, wall color and material, floor material, and how the room feels like based on this image? {obj_prompt} "
-
-                caption = caption_image(os.path.join("/projectnb/ivc-ml/array/research/robotics/ProcTHOR", img), prompt)
+                caption = caption_image(os.path.join(image_path, img), prompt)
 
                 # print(prompt, caption)
-                all_room_captions.append((img, seg_im, caption))
-                # pdb.set_trace()
-        
-            all_house_caption_data.append((ind, all_room_captions))
+                all_room_captions.append(caption)
 
-            json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly_new.json", "w"))
+            pdb.set_trace()
+            all_house_caption_data.append((program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions))
+
+            json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly.json", "w"))
 
     if generate_summary:
         # load the captions data

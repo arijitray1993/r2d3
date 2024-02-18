@@ -36,14 +36,17 @@ class HouseSemanticSimilarity:
         self.object_count_error = []
         self.num_corner_error = []
         self.object_finegrain_accuracy = []
+        self.window_accuracy= []
 
         self.logger = args['logger']
 
     def update(self, output, gt):
         # compute text sim
         # convert output program text to gen config
-        room_response = output.split("\n Answer: \n")[-1]
+        # pdb.set_trace()
+        room_response = output.split(": \n")[-1]
         room_json_text = "\n".join(room_response.split("\n")[:-1])
+        room_json_text = room_json_text.split("###")[0]
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
 
@@ -56,7 +59,7 @@ class HouseSemanticSimilarity:
         
         # convert gt program text to gen config
         gt_house_text = gt['text_labels'][0]
-        gt_house_text = gt_house_text.split("\n Answer: \n")[-1]
+        gt_house_text = gt_house_text.split(": \n")[-1]
         gt_house_text = gt_house_text.replace("(", "[")
         gt_house_text = gt_house_text.replace(")", "]")
         # pdb.set_trace()
@@ -187,7 +190,7 @@ class HouseJsonSimilarity:
         for i, image_list in enumerate(self.gt_images):
             # check if image is pil or file path
             if isinstance(image_list[0], str):
-                image_list = [Image.open(image_path) for image_path in image_list]
+                images = [Image.open(image_path) for image_path in image_list]
             else:
                 images = image_list
             

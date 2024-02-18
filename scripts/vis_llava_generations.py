@@ -24,29 +24,138 @@ import utils.ai2thor_utils as ai2thor_utils
 def generate_output_houses(json_path):
 
     output_json = json.load(open(json_path, 'r'))
+    image_save_folder = json_path.replace("output.json", "gen_images")
+    os.makedirs(image_save_folder, exist_ok=True)
     # this is list of raw text, each for a room gen 
 
-    response_rooms = [out_text.split("\n Answer: \n")[-1] for out_text in output_json]
+    response_rooms = [out_text.split(": \n")[-1] for out_text in output_json]
     
     for room_ind, room_response in enumerate(response_rooms):
+        if room_ind<=1:
+            continue
         room_json_text = "\n".join(room_response.split("\n")[:-1])
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
 
-        # pdb.set_trace()
+        house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
+        house_json = house_json.house_json
         try:
-            house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
+            controller = Controller(scene=house_json, width=800,height=800)
         except:
-            print("no room json found")
-            continue
-        controller = Controller(scene=house_json.house_json, width=800,height=800)
-        
-        controller.step(dict(action='Initialize'))
+            print("not a valid house json")
 
-        img = Image.fromarray(controller.last_event.frame)
-        img.save(f"vis/example_{room_ind}.png")
+        try:
+            event = controller.step(action="GetReachablePositions")
+        except:
+            print("Cannot get reachable positions, continuing")
+            controller.stop()
+            continue
+        reachable_positions = event.metadata["actionReturn"]
+
+        # 2. get the corner x,z coordinates from house json room polygon
+        corner_positions = []
+        room = house_json['rooms'][0]
+        polygon = room['floorPolygon']
+        for point in polygon:
+            corner_positions.append((point['x'], point['z']))
+        
+        cam_ind_to_position = {}
+        # 3. get the interior angle for each corner
+        # hacky way: get the neihboring two polygon points, compute the centroid
+        # , check if centroid is inside the polygon, if inside, compute the angle of the vector from the corner to the centroid to the x-axis
+        # if outside, compute the 180-angle. 
+
+        shape_polygon = Polygon(corner_positions)
+
+        # make a mapping to obj id to obj name
+        obj_id_to_name = {}
+        for obj in house_json['objects']:
+            obj_id_to_name[obj['id']] = obj['assetId']  
+        
+        all_imgs = []
+        all_objs = []
+        all_seg_frames = []
+        for corner_ind, corner in enumerate(corner_positions):
+            prev_ind = (corner_ind-1)%len(corner_positions)
+            next_ind = (corner_ind+1)%len(corner_positions)
+            
+            PREV_POINT = corner_positions[prev_ind]
+            NEXT_POINT = corner_positions[next_ind] 
+
+            centroid_x = (PREV_POINT[0] + NEXT_POINT[0] + corner[0])/3
+            centroid_z = (PREV_POINT[1] + NEXT_POINT[1] + corner[1])/3
+
+            # check if centroid is inside polygon
+            in_polygon = shape_polygon.contains(Point(centroid_x, centroid_z))
+            
+            # compute angle from corner-centroid vector to x-axis
+            x1, z1 = corner
+            x2, z2 = centroid_x, centroid_z
+            pi = 3.1415
+            try:
+                angle_pos_y = 180*math.atan((x2-x1)/(z2-z1))/pi
+            except:
+                print("not really a corner")
+                controller.stop()
+                continue
+            
+            if x2 > x1 and z2 > z1:
+                quadrant = "First Quadrant"
+            elif x2 < x1 and z2 > z1:
+                quadrant = "Second Quadrant"
+            elif x2 < x1 and z2 < z1:
+                quadrant = "Third Quadrant"
+            elif x2 > x1 and z2 < z1:
+                quadrant = "Fourth Quadrant"
+
+            if angle_pos_y < 0:
+                if quadrant == "Second Quadrant":
+                    angle = 360 + angle_pos_y
+                elif quadrant == "Fourth Quadrant":
+                    angle = 180 + angle_pos_y
+            else:
+                if quadrant == "First Quadrant":
+                    angle = angle_pos_y
+                elif quadrant == "Third Quadrant":
+                    angle = 180 + angle_pos_y
+            
+            if not in_polygon:
+                angle = angle + 180
+            
+            print("corner", corner, "angle", angle)
+
+            # 4. find the closest reachable position and teleport the agent there and place camera at angle
+            closest_reachable_positions = sorted(reachable_positions, key=lambda x: (x['x']-corner[0])**2 + (x['z']-corner[1])**2)
+            position = random.choice(closest_reachable_positions[:10])
+
+            position['x'] = round(position['x']*4)/4.0
+            position['z'] = round(position['z']*4)/4.0
+            position['y'] = 0.9
+            rotation = { "x": 0.0, "y": angle, "z": 0.0} 
+
+            # check if position is in polygon
+            if not shape_polygon.contains(Point(position['x'], position['z'])):
+                print("not in polygon")
+                controller.stop()
+                continue             
+            
+            try:
+                event = controller.step(action="Teleport", position=position, rotation=rotation)
+            except:
+                print("teleport failed")
+                controller.stop()
+                continue
+
+            img = Image.fromarray(controller.last_event.frame)
+            img.save(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png")
+
+        pdb.set_trace()
+        #img = Image.fromarray(controller.last_event.frame)
+        #img.save(f"vis/example_{room_ind}.png")
+
+        controller.stop()
 
 
 if __name__=="__main__":
 
-    pass
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes/output.json")

@@ -25,7 +25,7 @@ sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LL
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
 from llava.eval.run_llava import eval_model
-
+from llava.mm_utils import KeywordsStoppingCriteria
 #from transformers import LlamaForCausalLM, CodeLlamaTokenizer
 
 
@@ -78,10 +78,11 @@ class LlavaModelInterface(nn.Module):
         super().__init__()
         model_path = "liuhaotian/llava-v1.5-7b"
 
-        _, self.model, _, _ = load_pretrained_model(
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
             model_path=model_path,
             model_base=None,
-            model_name=get_model_name_from_path(model_path)
+            model_name=get_model_name_from_path(model_path),
+            # load_8bit=True
         )
 
         self.temperature = args['temperature']
@@ -89,8 +90,11 @@ class LlavaModelInterface(nn.Module):
         self.num_beams = args['num_beams']
         self.max_new_tokens = args['max_new_tokens']
 
+        self.keywords = ["###", " \n###"]
+
     def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
-        # pdb.set_trace()
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
         output_ids = self.model.generate(
             input_ids,
             images=pixel_values.to(self.model.dtype),
@@ -100,12 +104,12 @@ class LlavaModelInterface(nn.Module):
             num_beams=self.num_beams,
             max_new_tokens=self.max_new_tokens,
             use_cache=True,
+            stopping_criteria=[stopping_criteria]
         )
 
         return output_ids
 
     def forward(self, input_ids, pixel_values, attention_mask, labels=None,):
-        
         outputs =  self.model(
             input_ids,
             images=pixel_values.to(self.model.dtype),
@@ -113,6 +117,7 @@ class LlavaModelInterface(nn.Module):
             return_dict=True,
             labels=labels,
             attention_mask=attention_mask)
+        # pdb.set_trace()
         
         return outputs
 

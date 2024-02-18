@@ -15,7 +15,7 @@ import tqdm
 
 from accelerate import Accelerator
 from accelerate import Accelerator
-from transformers import AdamW, AutoModelForSequenceClassification, get_scheduler
+from transformers import AdamW, AutoModelForSequenceClassification, get_scheduler, BitsAndBytesConfig
  
 # import transformers
  
@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader
 
 from peft import LoraConfig, get_peft_model
 from peft import PeftConfig, PeftModel
+from peft import prepare_model_for_kbit_training
 
 import time
 import numpy as np
@@ -204,12 +205,16 @@ def main(cfg: DictConfig):
 
     wandb.login()
     run = wandb.init(project=cfg.exp_name, config=dict(cfg))
-    
+
+    # =============== define model choice ============================
+
+    model = getattr(models, cfg.model_choice)(cfg.model_init_args)
+
     # ======================= load dataloaders =====================
     dataloader_train = None
     if not cfg.eval_only:
         train_dataset = getattr(datasets, cfg.train_dataset_choice)(
-            cfg.train_dataset_args
+            cfg.train_dataset_args, model.tokenizer, model.image_processor
         )
         # this chooses the dataset of choice from data/datasets.py
         # according to the variable "train_dataset_choice" in cfg
@@ -229,10 +234,10 @@ def main(cfg: DictConfig):
     if cfg.eval_only:
         # if eval only, load test data, or else
         # load val data while training to choose hyperparameters.
-        dataset_val = getattr(datasets, cfg.val_dataset_choice)(cfg.val_dataset_args)
+        dataset_val = getattr(datasets, cfg.val_dataset_choice)(cfg.val_dataset_args, model.tokenizer, model.image_processor)
     else:
         dataset_val = getattr(datasets, cfg.valtrain_dataset_choice)(
-            cfg.valtrain_dataset_args
+            cfg.valtrain_dataset_args, model.tokenizer, model.image_processor
         )
     
     if cfg.get("val_batch_size"):
@@ -249,20 +254,24 @@ def main(cfg: DictConfig):
     )
     print("data loaded...")
     
-    # =============== define model choice ============================
-    model = getattr(models, cfg.model_choice)(cfg.model_init_args)
+    # =========== Define training choices ===========================
     if cfg.eval_only:
         model.eval()  # turns batch norm off.
 
     if cfg.get("tune_lora"):
         lora_config = LoraConfig(
             r=16,
-            lora_alpha=16,
+            lora_alpha=32,
             target_modules=["q_proj", "v_proj"],
             lora_dropout=0.1,
             bias="none",
             modules_to_save=[], #["embed_tokens", "lm_head"],
         )
+
+        #model.model.gradient_checkpointing_enable()
+        #model.model = prepare_model_for_kbit_training(model.model)
+
+
         if cfg.get("lora_model_path"):
             lora_model = PeftModel.from_pretrained(model, cfg.get("lora_model_path"))
             lora_model = lora_model.half()
