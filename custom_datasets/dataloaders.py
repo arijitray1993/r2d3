@@ -17,6 +17,8 @@ from torch.utils.data import WeightedRandomSampler
 from transformers import Blip2Processor, InstructBlipProcessor # , CodeLlamaTokenizer
 from transformers import AutoProcessor
 
+from shapely.geometry.polygon import Polygon
+
 from datasets import load_dataset
 
 import sys
@@ -125,7 +127,7 @@ class ADE20K(Dataset):
 
         caption = ""
 
-        prefix_text = f"## <image> An interactive room like the image can be rendered as: \n "
+        prefix_text = f"## <image> An interactive room like the image can be rendered as: \n"
     
         return image, prefix_text
 
@@ -317,14 +319,31 @@ class ProcTHOR_image_caption(Dataset):
 
         # choose an image at random to feed in and the caption from another image at random
         if self.args.get('use_seg_im'):
-            image_path = [random.choice(all_seg_frames)]
+            image_path = random.sample(all_seg_frames, self.args.get('num_images'))
             caption_image  = random.choice(all_room_captions)
 
         else:
             image_path, caption_image = random.sample(all_room_captions, 2)
             
+        if self.args.get('num_images') == 1:
+            image = Image.open(image_path[0]).convert("RGB")
+        else:
+            images = [Image.open(im_path) for im_path in image_path]
+        
+            # Calculate total width and maximum height
+            total_width = sum(image.width for image in images)
+            max_height = max(image.height for image in images)
 
-        image = Image.open(image_path[0]).convert("RGB")
+            # Create a new blank image with the correct size
+            new_image = Image.new('RGB', (total_width, max_height))
+
+            # Paste images into the new image
+            x_offset = 0
+            for image in images:
+                new_image.paste(image, (x_offset, 0))
+                x_offset += image.width
+
+            image = new_image
 
         if self.args.get('use_seg_im'):
             # convert the seg im colors to ade compatible colors. 
@@ -370,13 +389,30 @@ class ProcTHOR_image_caption(Dataset):
                 new_color = np.array(new_color)
                 new_color = np.tile(new_color, (np.sum(np.all(all_colors == color, axis=1)), 1))
 
+                # add a bit of random gaussian noise
+                if self.args.get('add_noise'):
+                    if self.args['split']=="train":
+                        new_color = new_color + np.random.normal(0, random.choice([2,4,6,8,10]), new_color.shape)
+                    else:
+                        new_color = new_color + np.random.normal(0, 4, new_color.shape)
+                    
                 all_colors[np.all(all_colors == color, axis=1)] = new_color
             
             new_segmentation_frame = all_colors.reshape(segmentation_frame.shape)
             image = Image.fromarray(new_segmentation_frame)
+            if self.args.get('use_depth_im'):
+                depth_im_path = image_path[0].replace("_seg", "_depth")
+                depth_im = Image.open(depth_im_path)
+                # overlay the depth image on the seg image
+                depth_im = depth_im.convert("RGB")
+                depth_im = depth_im.resize(image.size)
+                image = Image.blend(image, depth_im, self.args.get('depth_alpha'))
+                # pdb.set_trace()
+            # pdb.set_trace()
             # pdb.set_trace()
         
-        caption = caption_image[1]
+        caption = caption_image[-1]
+        # pdb.set_trace()
         # if caption too long take onl first 2 sentences
         # pdb.set_trace()
         # caption = ". ".join(caption.split(". ")[:2])
@@ -385,9 +421,10 @@ class ProcTHOR_image_caption(Dataset):
         # compute area of the room
         room = house_json['rooms'][0]
         polygon = room['floorPolygon']
-        x = [point['x'] for point in polygon]
-        z = [point['z'] for point in polygon]
-        area = 0.5 * np.abs(np.dot(x, np.roll(z, 1)) - np.dot(z, np.roll(x, 1)))
+        polygon_coords = [(point['x'], point['z']) for point in polygon]
+        room_polygon = Polygon(polygon_coords)
+        area = round(room_polygon.area, 2)
+        # pdb.set_trace()
 
         if self.args.get('language_only'):
             prefix_text = f"## \n Write yaml for an interactive room with {num_corner} corners with the description: {caption}. \n Answer: "
@@ -396,19 +433,24 @@ class ProcTHOR_image_caption(Dataset):
             prefix_text = f"## \n Write yaml for an interactive room with {num_corner} corners with the description: {summary}. \n Answer: "
         else:
             prefix_options = [
-                f"## <image> An interactive room with {num_corner} corners that looks like the image can be rendered as: \n",
+                f"## <image> An interactive room with {num_corner} corners with {area} area that looks like the image can be rendered as: \n",
                 f"## <image> An interactive room like the image can be rendered as: \n",
                 f"## <image> Can you render a room with {num_corner} corners that looks like the image? Surely: \n",
+                f"## <image> A room with {num_corner} corners like the image with description: {caption}. The yaml is: \n",
+                f"## <image> A room with {num_corner} corners with description: {caption}. The yaml is: \n",
                 f"## <image> Can you render a room with that looks like the image? Surely: \n",
-                f"## <image> {caption}. The yaml: \n",
-                f"## {caption}. Can you render such a room? Yes: \n",
-                f"## <image> {caption}. Generate the room as:  \n",
-                f"## <image> {caption}. The yaml for the room: \n ",
-                f"## {caption}. We can generate it as:  \n",
+                f"## {caption}. Can you render such a room with an area of {area}? Yes: \n",
+                f"## <image> {caption}. Generate such a room with {num_corner} corners as: \n",
+                f"## <image> {caption}. The yaml for the room with {num_corner} corners with {area} area: \n ",
+                f"## {caption}. We can generate it as: \n",
                 f"## <image> {caption}. How can I render it? Like this: \n",
                 f"## <image> {caption}. A room that looks like this can be rendered as: \n",
             ]
-            prefix_text = random.choice(prefix_options)
+
+            if self.args['split'] in ["val", "valtrain"]:
+                prefix_text = prefix_options[7]
+            else:
+                prefix_text = random.choice(prefix_options)
         
         if self.split == "train":
             prompt = prefix_text + program_text + " \n###"

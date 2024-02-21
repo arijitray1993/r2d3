@@ -21,6 +21,31 @@ sys.path.append("../")
 import utils.ai2thor_utils as ai2thor_utils
 
 
+def get_top_down_frame(controller):
+    # Setup the top-down camera
+    event = controller.step(action="GetMapViewCameraProperties", raise_for_failure=True)
+    pose = copy.deepcopy(event.metadata["actionReturn"])
+
+    bounds = event.metadata["sceneBounds"]["size"]
+    max_bound = max(bounds["x"], bounds["z"])
+
+    pose["fieldOfView"] = 50
+    pose["position"]["y"] += 1.1 * max_bound
+    pose["orthographic"] = False
+    pose["farClippingPlane"] = 50
+    del pose["orthographicSize"]
+
+    # add the camera to the scene
+    event = controller.step(
+        action="AddThirdPartyCamera",
+        **pose,
+        skyboxColor="white",
+        raise_for_failure=True,
+    )
+    top_down_frame = event.third_party_camera_frames[-1]
+    return Image.fromarray(top_down_frame)
+
+
 def generate_output_houses(json_path):
 
     output_json = json.load(open(json_path, 'r'))
@@ -31,13 +56,16 @@ def generate_output_houses(json_path):
     response_rooms = [out_text.split(": \n")[-1] for out_text in output_json]
     
     for room_ind, room_response in enumerate(response_rooms):
-        if room_ind<=1:
-            continue
+        print(f"-------------Processing room {room_ind}---------------")
         room_json_text = "\n".join(room_response.split("\n")[:-1])
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
 
-        house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
+        try:
+            house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
+        except:
+            print("not a valid house json")
+            continue
         house_json = house_json.house_json
         try:
             controller = Controller(scene=house_json, width=800,height=800)
@@ -51,6 +79,12 @@ def generate_output_houses(json_path):
             controller.stop()
             continue
         reachable_positions = event.metadata["actionReturn"]
+
+        if reachable_positions is None:
+            print("No reachable positions, continuing")
+            # pdb.set_trace()
+            controller.stop()
+            continue
 
         # 2. get the corner x,z coordinates from house json room polygon
         corner_positions = []
@@ -149,7 +183,14 @@ def generate_output_houses(json_path):
             img = Image.fromarray(controller.last_event.frame)
             img.save(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png")
 
-        pdb.set_trace()
+        try:
+            top_down_frame = get_top_down_frame(controller)
+            top_down_frame.save(f"{image_save_folder}/example_top_down_{room_ind}.png")
+        except:
+            print("couldnt get top down frame")
+        
+
+        # pdb.set_trace()
         #img = Image.fromarray(controller.last_event.frame)
         #img.save(f"vis/example_{room_ind}.png")
 
@@ -158,4 +199,4 @@ def generate_output_houses(json_path):
 
 if __name__=="__main__":
 
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes/output.json")
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_depth/output.json")

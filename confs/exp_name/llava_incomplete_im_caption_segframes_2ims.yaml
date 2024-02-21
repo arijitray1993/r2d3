@@ -1,4 +1,4 @@
-exp_name: llava_incomplete_im_caption_segframes_ade20k
+exp_name: llava_incomplete_im_caption_segframes_2ims
 device: 'gpu'
 num_devices: 1
 num_workers: 4
@@ -13,7 +13,7 @@ eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes/cheerful-envelope-59_25000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_2ims/flashing-pig-1_25000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes/captivating-cupid-55_10000
 
 eval_every: 5000
 num_eval_steps: 100
@@ -24,7 +24,8 @@ train_dataset_args: {
   split: "train",
   model: "llava",
   model_path: liuhaotian/llava-v1.5-7b,
-  use_seg_im: True
+  use_seg_im: True,
+  num_images: 2,
 }
 train_collate_fn: "collate_fn"
  
@@ -34,24 +35,26 @@ valtrain_dataset_args: {
   split: "valtrain",
   model: "llava",
   model_path: liuhaotian/llava-v1.5-7b,
-  use_seg_im: True
+  use_seg_im: True,
+  num_images: 2,
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-#val_dataset_choice: "ProcTHOR_image_caption"
+val_dataset_choice: "ProcTHOR_image_caption"
+val_dataset_args: {
+  split: "val",
+  model: "llava",
+  model_path: liuhaotian/llava-v1.5-7b,
+  use_seg_im: True,
+  num_images: 2,
+}
+val_collate_fn: "collate_fn" 
+
+#val_dataset_choice: "ADE20K"
 #val_dataset_args: {
-#  split: "val",
-#  model: "llava",
-#  model_path: liuhaotian/llava-v1.5-7b,
 #  use_seg_im: True
 #}
 #val_collate_fn: "collate_fn" 
-
-val_dataset_choice: "ADE20K"
-val_dataset_args: {
-  use_seg_im: True
-}
-val_collate_fn: "collate_fn" 
 
 # The dataset __getitem__ must return a dictionary.
 
@@ -79,5 +82,5 @@ losses: []
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
   ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
-#  ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []]
+  ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []]
 ]
