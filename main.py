@@ -124,7 +124,6 @@ class GenericModule():
 
                 outputs = self.model.forward(**{inp: batch[inp] for inp in self.model_input_choice})
                 loss = outputs.loss
-
                 self.accelerator.backward(loss)
 
                 self.optimizer.step()
@@ -289,7 +288,7 @@ def main(cfg: DictConfig):
         else:
             lora_model = get_peft_model(model, lora_config)
             lora_model = lora_model.half()
-        
+        # pdb.set_trace()
         print("Lora models loaded...")
 
         for name, param in lora_model.named_parameters():

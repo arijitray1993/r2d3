@@ -19,6 +19,7 @@ if __name__=="__main__":
     print("getting all ade objects")
     all_possible_objects = set()
     obj_to_color = dict()
+    color_to_obj = dict()
     for folders in os.listdir(image_path):
         # check if folder
         if "." in folders:
@@ -54,11 +55,15 @@ if __name__=="__main__":
                 if unique_value in obj_id_to_name:
                     obj_name = obj_id_to_name[unique_value]
                     obj_to_color[obj_name] = rgb_value
+                    color_to_obj[str(rgb_value)] = obj_name
                     all_possible_objects.add(obj_name)
                     # pdb.set_trace()
 
             # all_possible_objects.update(set(obj_id_to_name.values()))
+    with open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_color_to_obj.json", "w") as f:
+        json.dump(color_to_obj, f)
     
+    exit()
     # get all ai2thor objects
     print("getting all ai2thor objects")
     ai2thor_objs = json.load(open("/projectnb/ivc-ml/array/research/robotics/ProcTHOR/all_objects.json"))
@@ -112,7 +117,9 @@ if __name__=="__main__":
     pdb.set_trace()
 
     # save to json
-    with open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json", "w") as f:
-        json.dump([closest_ai2thor_to_ade, ai2assetname_to_objname, obj_to_color], f)
+    #with open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json", "w") as f:
+    #    json.dump([closest_ai2thor_to_ade, ai2assetname_to_objname, obj_to_color], f)
+    
+    
     
     pdb.set_trace()

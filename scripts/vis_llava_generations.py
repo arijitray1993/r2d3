@@ -19,6 +19,7 @@ import ast
 import sys
 sys.path.append("../")
 import utils.ai2thor_utils as ai2thor_utils
+from matplotlib import pyplot as plt
 
 
 def get_top_down_frame(controller):
@@ -50,10 +51,16 @@ def generate_output_houses(json_path):
 
     output_json = json.load(open(json_path, 'r'))
     image_save_folder = json_path.replace("output.json", "gen_images")
+    format_results_folder = json_path.replace("output.json", "format_results")
     os.makedirs(image_save_folder, exist_ok=True)
+    os.makedirs(format_results_folder, exist_ok=True)
     # this is list of raw text, each for a room gen 
 
-    response_rooms = [out_text.split(": \n")[-1] for out_text in output_json]
+    exp_path = "/".join(json_path.split("/")[:-1])
+
+    # pdb.set_trace()
+
+    response_rooms = [out_text[0].split(": \n")[-1] for out_text in output_json]
     
     for room_ind, room_response in enumerate(response_rooms):
         print(f"-------------Processing room {room_ind}---------------")
@@ -61,6 +68,8 @@ def generate_output_houses(json_path):
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
 
+        # pdb.set_trace()
+        
         try:
             house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
         except:
@@ -188,7 +197,36 @@ def generate_output_houses(json_path):
             top_down_frame.save(f"{image_save_folder}/example_top_down_{room_ind}.png")
         except:
             print("couldnt get top down frame")
+            controller.stop()
+            continue
         
+        # plot input im/segframe, language and output corner ims in one im
+        input_im = exp_path+f"/vis/gt_images_{room_ind}.png"
+        out_text = output_json[room_ind]
+        caption = out_text[0].split(": \n")[0]
+
+        # add a \n in caption after every 50 chaarcters
+        caption = "\n".join([caption[i:i+50] for i in range(0, len(caption), 50)])
+
+        # plot input_im, caption, top down frame and corner_ims
+        plt.figure(figsize=(30, 30))
+        plt.subplot(3, 3, 1)
+        plt.imshow(Image.open(input_im))
+        plt.title(caption)
+        plt.axis('off')
+        plt.subplot(3, 3, 2)
+        plt.imshow(top_down_frame)
+        plt.title("Top Down View")
+        plt.axis('off')
+        for corner_ind, corner in enumerate(corner_positions[:6]):
+            if os.path.exists(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png"):
+                plt.subplot(3, 3, 3+corner_ind)
+                plt.imshow(Image.open(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png"))
+                plt.title(f"Corner {corner_ind}")
+                plt.axis('off')
+        plt.axis('off')
+        plt.savefig(f"{format_results_folder}/example_{room_ind}.png")
+        plt.close()
 
         # pdb.set_trace()
         #img = Image.fromarray(controller.last_event.frame)
@@ -199,4 +237,4 @@ def generate_output_houses(json_path):
 
 if __name__=="__main__":
 
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_depth/output.json")
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_ade20k/output.json")

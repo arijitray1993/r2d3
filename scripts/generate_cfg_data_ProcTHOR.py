@@ -16,7 +16,7 @@ import os
 
 import sys
 sys.path.append("../")
-from utils.ai2thor_utils import generate_program_from_roomjson, generate_room_programs_from_house_json
+from utils.ai2thor_utils import generate_program_from_roomjson, generate_room_programs_from_house_json, make_house_from_cfg
 
 
 def get_top_down_frame(controller):
@@ -46,33 +46,41 @@ def get_top_down_frame(controller):
 
 def render_room_program_images(program_json_data_path, image_save_folder="", load_progress=True):
 
-        print("length of already done data", len(os.listdir(image_save_folder)))
         # pdb.set_trace()
         program_json_data = json.load(open(program_json_data_path))
         #except:
 
         done_inds = [int(im_ind.split(".")[0].split("_")[1]) for im_ind in os.listdir(image_save_folder)]
+        done_inds = list(set(done_inds))
+
+        '''
+        print("length of done data: ", len(done_inds))
+
         if len(done_inds) == 0:
             max_ind = 0
         else:
             max_ind = max(done_inds)
+        '''
 
         if load_progress:
-            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json"))
+            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_new.json"))
         else:
             image_program_json_data = []
         
         for ind, (program_text, house_json, og_house_json) in enumerate(tqdm.tqdm(program_json_data)):
-
+            
             # if we have to continue from a certain index
             if load_progress:
-                if ind < max_ind: # len(image_program_json_data):
+                # if ind < max_ind: # len(image_program_json_data):
+                #    continue
+                if ind < len(image_program_json_data):
                     continue
 
             if ind in [5, 11, 23, 32]: # everything crashes unexpectedly for these, to do look into later
                 continue
-            
+            # pdb.set_trace()
             # render the json
+            
             try:
                 controller = Controller(scene=house_json, width=800, height=800, renderInstanceSegmentation=True, visibilityDistance=30)
                 # pdb.set_trace()
@@ -249,7 +257,7 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 print("couldnt get top down frame")
             '''
             #pdb.set_trace()
-            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json", "w"))
+            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_new.json", "w"))
             controller.stop()
 
 
@@ -265,7 +273,7 @@ def generate_house_programs_train():
 
         all_room_json_programs.extend(room_yamls_programs)
 
-    json.dump(all_room_json_programs, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_10k_room_json_programs_train_windowsadded.json", "w"))
+    json.dump(all_room_json_programs, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_10k_room_json_programs_train_windowsadded_format.json", "w"))
 
 def generate_house_programs_val():
     dataset = prior.load_dataset("procthor-10k")
@@ -288,6 +296,6 @@ if __name__=="__main__":
     # generate_house_programs_val()
 
     im_folder_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/vis/ai2thor_windowadded/train"
-    program_json_data_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_10k_room_json_programs_train_windowsadded.json"
+    program_json_data_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_10k_room_json_programs_train_windowsadded_format.json"
 
-    render_room_program_images(program_json_data_path, image_save_folder=im_folder_path, load_progress=False)
+    render_room_program_images(program_json_data_path, image_save_folder=im_folder_path, load_progress=True)

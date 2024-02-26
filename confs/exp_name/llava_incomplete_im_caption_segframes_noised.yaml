@@ -13,7 +13,7 @@ eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_noised/resplendent-wonton-4_70000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_noised/lucky-lantern-9_65000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_noised/resplendent-wonton-4_70000
 
 eval_every: 5000
 num_eval_steps: 100

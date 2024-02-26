@@ -9,14 +9,14 @@ batch_size: 1
 lr: 0.000005
 weight_decay: 0.0001
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_depth/glistening-springroll-2_60000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_depth/sweet-chrysanthemum-5_40000
 
 eval_every: 20000
-num_eval_steps: 5
+num_eval_steps: 100
 no_shuffle: False
 
 train_dataset_choice: "ProcTHOR_image_caption"
@@ -87,6 +87,6 @@ losses: []
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
-#  ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []]
+  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
+  ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []]
 ]

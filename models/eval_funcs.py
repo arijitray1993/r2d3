@@ -6,6 +6,8 @@ import pdb
 from PIL import Image
 import numpy as np
 import yaml
+from shapely.geometry import Polygon
+import shapely
 
 class GenHouseIms:
 
@@ -63,13 +65,14 @@ class HouseSemanticSimilarity:
         gt_house_text = gt_house_text.replace("(", "[")
         gt_house_text = gt_house_text.replace(")", "]")
         # pdb.set_trace()
+
         try:
             gt_house_dict = yaml.load(gt_house_text, Loader=yaml.FullLoader)
         except:
             gt_house_dict = {}
-        
+
         self.gt_house_jsons.append(gt_house_dict)
-    
+
     def compute(self):
         
         for pred_house, gt_house in zip(self.house_jsons, self.gt_house_jsons):
@@ -128,6 +131,7 @@ class HouseSemanticSimilarity:
                     self.object_class_accuracy.append(1)
                 else:
                     self.object_class_accuracy.append(0)
+            
 
             for obj in gt_objs:
                 if obj in pred_objs:
@@ -165,9 +169,7 @@ class HouseSemanticSimilarity:
 
 class HouseJsonSimilarity:
     def __init__(self, args):
-
         self.sim_scores = []
-
         self.house_jsons = []
         self.gt_images = []
 
@@ -175,7 +177,7 @@ class HouseJsonSimilarity:
 
     def update(self, output, gt):
         # compute text sim
-        self.house_jsons.append(output)
+        self.house_jsons.append((output, 0))
         self.gt_images.append(gt['image_lists'][0])
 
     def compute(self):
@@ -188,7 +190,7 @@ class HouseJsonSimilarity:
         os.makedirs(os.path.join(self.exp_folder, "vis"), exist_ok=True)
         
         for i, image_list in enumerate(self.gt_images):
-            # check if image is pil or file path
+            # check if image is PIL or file path
             if isinstance(image_list[0], str):
                 images = [Image.open(image_path) for image_path in image_list]
             else:
