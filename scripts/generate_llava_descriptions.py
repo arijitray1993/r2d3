@@ -74,10 +74,9 @@ if __name__=="__main__":
 
     if caption_individual:
         # load the ai2thor apartments, images, and objects dataset
-        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json", "r"))
+        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json", "r"))
 
-        # all_house_caption_data = []
-        all_house_caption_data = json.load(open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly.json", "r"))
+        all_house_caption_data = []
         start_ind = len(all_house_caption_data)
         for ind, (program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_ims, color_to_objid, obj_id_to_name) in enumerate(tqdm.tqdm(image_program_json_data)):
             if ind < start_ind:
@@ -99,11 +98,13 @@ if __name__=="__main__":
 
                 object_names = list(set(object_names))
 
-                obj_prompt = f"The image in view contains these objects: {', '.join(object_names)}. So please only use these objects in your description."
+                obj_prompt = f"The image in view contains these objects: {', '.join(object_names)}. So please only use these objects in your description. Avoid using words like RoboTHOR and only use the generic object names."
 
                 prompt = f"Can you please write a caption describing how the room looks like - the objects and how many, the shape, wall color and material, floor material, and how the room feels like based on this image? {obj_prompt} "
 
                 caption = caption_image(os.path.join("/projectnb/ivc-ml/array/research/robotics/ProcTHOR", img), prompt)
+
+                pdb.set_trace()
 
                 # print(prompt, caption)
                 all_room_captions.append((img, seg_im, caption))
@@ -111,7 +112,7 @@ if __name__=="__main__":
         
             all_house_caption_data.append((ind, all_room_captions))
 
-            json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly_new.json", "w"))
+            json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_childrenadded_gtobjonly_new.json", "w"))
 
     if generate_summary:
         # load the captions data

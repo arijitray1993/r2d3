@@ -45,6 +45,55 @@ from utils.ai2thor_utils import generate_program_from_roomjson, format_program
 import numpy as np
 
 
+def convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, ai2assetname_to_objname, closest_ai2thor_to_ade, ade_obj_to_color):
+    all_colors = segmentation_frame.reshape(-1, 3)
+    unique_colors = set([tuple(color) for color in all_colors])
+
+    for color in unique_colors:
+        if str(color) in color_to_objid:
+            ai2_objid = color_to_objid[str(color)]
+            if "exterior" in ai2_objid:
+                closest_ade_obj = "wall"
+            elif "room" in ai2_objid:
+                closest_ade_obj = "floor, flooring"
+            elif "Ceiling" in ai2_objid or "ceiling" in ai2_objid:
+                closest_ade_obj = "ceiling"
+            elif ai2_objid.isnumeric():
+                closest_ade_obj = "wall"
+            elif "window" in ai2_objid:
+                closest_ade_obj = "windowpane, window"
+            else:
+                ai2_objid_format = ai2_objid.split("___")[0]
+                try:
+                    ai2_assetname = obj_id_to_name[ai2_objid_format]
+                    obj_name = ai2assetname_to_objname[ai2_assetname]
+                    closest_ade_obj, distance = closest_ai2thor_to_ade[obj_name[0]][0]
+                except:
+                    print(ai2_objid)
+                    print(ai2_objid_format)
+                    print(ai2_assetname)
+                    print(obj_name)
+        else:
+            print(color)
+            print(color_to_objid)
+            closest_ade_obj = "wall"
+
+        try:
+            new_color = ade_obj_to_color[closest_ade_obj]
+        except:
+            print(closest_ade_obj)
+
+        # repeat new colors the number of times color appears
+        new_color = np.array(new_color)
+        new_color = np.tile(new_color, (np.sum(np.all(all_colors == color, axis=1)), 1))
+    
+        all_colors[np.all(all_colors == color, axis=1)] = new_color
+    
+    new_segmentation_frame = all_colors.reshape(segmentation_frame.shape)
+
+    return new_segmentation_frame
+
+
 class LSUNBedrooms(Dataset):
     def __init__(self, args):
         self.args = args
@@ -297,6 +346,170 @@ class AnyImageCaption(Dataset):
         return return_dict
 
 
+
+class ProcTHOR_failure_refine(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor 
+        self.batch_decode = self.tokenizer.batch_decode
+
+        caption_data = json.load(
+            open(
+                "/projectnb/ivc-ml/array/research/robotics/dreamworlds/"
+                + "custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly_new.json", "r"
+                )
+            )
+
+        # get the data only for which we have captions
+        json_program_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json"))
+        json_data = []
+        for ind, all_room_captions in caption_data:
+            json_data.append((json_program_data[ind], all_room_captions))
+
+        # pdb.set_trace()
+        self.failure_data = json.load(open(self.args.get('failure_data_path')))
+
+        self.image_data_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/"
+        # only use the json data we have images for
+        self.data = []
+        self.summary_data = []
+        for ind, (room_data, room_captions) in enumerate(json_data):
+            all_imgs = room_data[4]
+            if len(all_imgs) < 2:
+                continue
+            if len(room_captions) < 2:
+                continue
+            if not os.path.exists(all_imgs[0]):
+                continue
+            self.data.append((room_data, room_captions))
+        
+        print("Total number of data points: ", len(self.data))
+
+        # split into train and test
+        if args["split"] == "train":
+            self.data = self.data[:int(len(self.data) * 0.8)]
+            self.split = "train"
+        elif args["split"] == "valtrain":
+            self.data = self.data[int(len(self.data) * 0.8):int(len(self.data) * 0.9)]
+            self.split = "val"
+        elif args["split"] == "val":
+            self.data = self.data[int(len(self.data) * 0.9):]
+            self.split = "test"
+
+        print(f"Total number of data in {args['split']}: ", len(self.data))
+
+        self.closest_ai2thor_to_ade, self.ai2assetname_to_objname, self.obj_to_color = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json"))
+    
+    def __getitem__(self, idx):
+        # randomly choose og data or failure data
+        if random.random() < 0.25:
+            room_data, all_room_captions = self.data[idx]
+            program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
+            program_text = generate_program_from_roomjson(house_json)
+
+            image_path = random.sample(all_seg_frames, 1)
+            caption_image  = random.choice(all_room_captions)
+            image = Image.open(image_path[0]).convert("RGB")
+            # segmentation_frame = np.array(image)
+            # new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
+
+            caption = caption_image[-1]
+
+            num_corner = len(all_imgs) # since we have an image from each corner.
+            
+            prefix_options = [
+                f"## <image> An interactive room like the image can be rendered as: \n",
+                f"## <image> Can you render a room with {num_corner} corners that looks like the image? Surely: \n",
+                f"## <image> A room with {num_corner} corners with description: {caption}. The yaml is: \n",
+                f"## <image> Can you render a room with that looks like the image? Surely: \n",
+                f"## <image> {caption}. Generate such a room with {num_corner} corners as: \n",
+                f"## <image> {caption}. The yaml for the room with {num_corner} corners: \n ",
+                f"## <image> {caption}. We can generate it as: \n",
+                f"## <image> {caption}. How can I render it? Like this: \n",
+            ]
+
+            if self.args['mode'] in ["val", "valtrain"]:
+                prefix_text = prefix_options[8]
+            else:
+                prefix_text = random.choice(prefix_options)
+        
+            if self.args['mode'] == "train":
+                prompt = prefix_text + program_text + " \n###"
+                text_labels = prompt
+            else:
+                prompt = prefix_text
+                text_labels = prefix_text + program_text + " \n###"
+
+            # pdb.set_trace()
+            
+            return [image,], caption, prompt, text_labels, [image_path[0],], house_json
+
+        else:
+            failure_sentence, input_im, current_im = self.failure_data[idx%len(self.failure_data)]
+            image1 = Image.open(input_im).convert("RGB")
+
+            # convert from panoptic to ade
+            # segmentation_frame = Image.open(current_im).convert("RGB")
+            # new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
+
+            image2 = Image.open(current_im).convert("RGB")
+            prompt = f"# {failure_sentence} \n###"
+
+            if self.args['mode'] == "train":
+                text_labels = prompt
+            else:
+                text_labels = prompt
+                prompt = prompt.split("refined program would be: ")[0] 
+            # pdb.set_trace()
+            return [image1, image2], failure_sentence, prompt, text_labels, [input_im, current_im], 0
+
+    def __len__(self,):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        
+        images_batch, captions, prompts, text_labels, image_file_list, house_jsons = zip(*batch)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            # chop off at 1400 len
+            if len(input_id) > 1300:
+                input_id = input_id[:1300]
+            input_ids.append(input_id)
+            attention_mask.append   (torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)   
+
+        attention_mask = torch.stack(attention_mask, dim=0)
+
+        new_images = []
+        for images in images_batch:
+            for image in images:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        # pdb.set_trace()
+        return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": input_ids,
+                "pixel_values": pixel_values,
+                "program_texts": prompts,
+                "text_labels": text_labels,
+                "image_lists": image_file_list,
+                'house_json': house_jsons,
+            }
+        
+        return return_dict
+
+
+
 class ProcTHOR_image_caption(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
@@ -369,113 +582,45 @@ class ProcTHOR_image_caption(Dataset):
             caption_image  = random.choice(all_room_captions)
 
         else:
-            image_path, caption_image = random.sample(all_room_captions, 2)
+            image_path = random.sample(all_room_captions, self.args.get('num_images'))
+            image_path = [x[0] for x in image_path]
+            caption_image  = random.choice(all_room_captions)
+            # pdb.set_trace()
             
-        if self.args.get('num_images') == 1:
-            image = Image.open(image_path[0]).convert("RGB")
-        else:
-            images = [Image.open(im_path) for im_path in image_path]
         
-            # Calculate total width and maximum height
-            total_width = sum(image.width for image in images)
-            max_height = max(image.height for image in images)
-
-            # Create a new blank image with the correct size
-            new_image = Image.new('RGB', (total_width, max_height))
-
-            # Paste images into the new image
-            x_offset = 0
-            for image in images:
-                new_image.paste(image, (x_offset, 0))
-                x_offset += image.width
-
-            image = new_image
+        images = [Image.open(im_path).convert("RGB") for im_path in image_path]
 
         if self.args.get('use_seg_im'):
             # convert the seg im colors to ade compatible colors. 
-            segmentation_frame = np.array(image)
-            
-            if self.args.get('use_panoptic'):
-                new_segmentation_frame = segmentation_frame
-            else:
-                all_colors = segmentation_frame.reshape(-1, 3)
-                unique_colors = set([tuple(color) for color in all_colors])
-
-                for color in unique_colors:
-                    if str(color) in color_to_objid:
-                        ai2_objid = color_to_objid[str(color)]
-                        if "exterior" in ai2_objid:
-                            closest_ade_obj = "wall"
-                        elif "room" in ai2_objid:
-                            closest_ade_obj = "floor, flooring"
-                        elif "Ceiling" in ai2_objid or "ceiling" in ai2_objid:
-                            closest_ade_obj = "ceiling"
-                        elif ai2_objid.isnumeric():
-                            closest_ade_obj = "wall"
-                        elif "window" in ai2_objid:
-                            closest_ade_obj = "windowpane, window"
-                        else:
-                            ai2_objid_format = ai2_objid.split("___")[0]
-                            try:
-                                ai2_assetname = obj_id_to_name[ai2_objid_format]
-                                obj_name = self.ai2assetname_to_objname[ai2_assetname]
-                                closest_ade_obj, distance = self.closest_ai2thor_to_ade[obj_name[0]][0]
-                            except:
-                                print(ai2_objid)
-                                print(ai2_objid_format)
-                                print(ai2_assetname)
-                                print(obj_name)
-                    else:
-                        print(color)
-                        print(color_to_objid)
-                        closest_ade_obj = "wall"
-
-                    try:
-                        new_color = self.obj_to_color[closest_ade_obj]
-                    except:
-                        print(closest_ade_obj)
-
-                    # repeat new colors the number of times color appears
-                    new_color = np.array(new_color)
-                    new_color = np.tile(new_color, (np.sum(np.all(all_colors == color, axis=1)), 1))
-
-                    # add a bit of random gaussian noise
-                    if self.args.get('add_noise'):
-                        if self.args['split']=="train":
-                            # new_color = new_color + np.random.normal(0, random.choice([2,4,6,8,10]), new_color.shape)
-                            new_color = new_color + np.random.normal(0, 4, new_color.shape)
-                        else:
-                            new_color = new_color + np.random.normal(0, 4, new_color.shape)
-                        
-                    all_colors[np.all(all_colors == color, axis=1)] = new_color
+            all_images = []
+            for image in images:
+                segmentation_frame = np.array(image)
                 
-                new_segmentation_frame = all_colors.reshape(segmentation_frame.shape)
+                if self.args.get('use_panoptic'):
+                    new_segmentation_frame = segmentation_frame
+                else:
+                    new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
+                
+                image = Image.fromarray(new_segmentation_frame)
+                if self.args.get('use_depth_im'):
+                    depth_im_path = image_path[0].replace("_seg", "_depth")
+                    depth_im = Image.open(depth_im_path)
+                    # overlay the depth image on the seg image
+                    depth_im = depth_im.convert("RGB")
+                    depth_im = depth_im.resize(image.size)
+                    image = Image.blend(image, depth_im, self.args.get('depth_alpha'))
+
+                if self.args.get('blend_real_im'):
+                    real_im_path = image_path[0].replace("_seg", "")
+                    real_im = Image.open(real_im_path).convert("RGB")
+                    real_im = real_im.resize(image.size)
+                    image = Image.blend(image, real_im, self.args.get('real_alpha'))
+                all_images.append(image)
+        else:
+            all_images = images
             
-            image = Image.fromarray(new_segmentation_frame)
-            if self.args.get('use_depth_im'):
-                depth_im_path = image_path[0].replace("_seg", "_depth")
-                depth_im = Image.open(depth_im_path)
-                # overlay the depth image on the seg image
-                depth_im = depth_im.convert("RGB")
-                depth_im = depth_im.resize(image.size)
-                image = Image.blend(image, depth_im, self.args.get('depth_alpha'))
-
-            if self.args.get('blend_real_im'):
-                real_im_path = image_path[0].replace("_seg", "")
-                real_im = Image.open(real_im_path).convert("RGB")
-                real_im = real_im.resize(image.size)
-                image = Image.blend(image, real_im, self.args.get('real_alpha'))
-
-                # pdb.set_trace()
-            # pdb.set_trace()
-            # pdb.set_trace()
-        
         caption = caption_image[-1]
-        # pdb.set_trace()
-        # if caption too long take only first 2 sentences
-        # pdb.set_trace()
-        # caption = ". ".join(caption.split(". ")[:2])
-        # pdb.set_trace()
+        
         num_corner = len(all_imgs) # since we have an image from each corner.
         # compute area of the room
         room = house_json['rooms'][0]
@@ -483,8 +628,7 @@ class ProcTHOR_image_caption(Dataset):
         polygon_coords = [(point['x'], point['z']) for point in polygon]
         room_polygon = Polygon(polygon_coords)
         area = round(room_polygon.area, 2)
-        # pdb.set_trace()
-
+        
         if self.args.get('language_only'):
             prefix_text = f"## \n Write yaml for an interactive room with {num_corner} corners with the description: {caption}. \n Answer: "
         elif self.args.get('summary_only'):
@@ -492,40 +636,39 @@ class ProcTHOR_image_caption(Dataset):
             prefix_text = f"## \n Write yaml for an interactive room with {num_corner} corners with the description: {summary}. \n Answer: "
         else:
             prefix_options = [
-                f"## <image> An interactive room with {num_corner} corners with {area} area that looks like the image can be rendered as: \n",
-                f"## <image> An interactive room like the image can be rendered as: \n",
-                f"## <image> Can you render a room with {num_corner} corners that looks like the image? Surely: \n",
-                f"## <image> A room with {num_corner} corners like the image with description: {caption}. The yaml is: \n",
-                f"## <image> A room with {num_corner} corners with description: {caption}. The yaml is: \n",
-                f"## <image> Can you render a room with that looks like the image? Surely: \n",
-                f"## <image> {caption}. Generate such a room with {num_corner} corners as: \n",
-                f"## <image> {caption}. The yaml for the room with {num_corner} corners: \n ",
-                f"## <image> {caption}. We can generate it as: \n",
-                f"## <image> {caption}. How can I render it? Like this: \n",
-                f"## <image> {caption}. A room that looks like this can be rendered as: \n",
+                f"## {'<image>'*len(images)} An interactive room with {num_corner} corners with {area} area that looks like the image can be rendered as: \n",
+                f"## {'<image>'*len(images)} An interactive room like the image can be rendered as: \n",
+                f"## {'<image>'*len(images)} Can you render a room with {num_corner} corners that looks like the image? Surely: \n",
+                f"## {'<image>'*len(images)} A room with {num_corner} corners like the image with description: {caption}. The yaml is: \n",
+                f"## {'<image>'*len(images)} A room with {num_corner} corners with description: {caption}. The yaml is: \n",
+                f"## {'<image>'*len(images)} Can you render a room with that looks like the image? Surely: \n",
+                f"## {'<image>'*len(images)} {caption}. Generate such a room with {num_corner} corners as: \n",
+                f"## {'<image>'*len(images)} {caption}. The yaml for the room with {num_corner} corners: \n ",
+                f"## {'<image>'*len(images)} {caption}. We can generate it as: \n",
+                f"## {'<image>'*len(images)} {caption}. How can I render it? Like this: \n",
+                f"## {'<image>'*len(images)} {caption}. A room that looks like this can be rendered as: \n",
             ]
 
-            if self.args['split'] in ["val", "valtrain"]:
+            if self.args['mode'] in ["val", "valtrain"]:
                 prefix_text = prefix_options[8]
             else:
                 prefix_text = random.choice(prefix_options)
-        
-        if self.split == "train":
+
+        if self.args['mode'] == "train":
             prompt = prefix_text + program_text + " \n###"
             text_labels = prompt
         else:
             prompt = prefix_text
             text_labels = prefix_text + program_text + " \n###"
 
-        # pdb.set_trace()
-        return image, caption, prompt, text_labels, [image_path[0],], house_json
+        return all_images, caption, prompt, text_labels, image_path, house_json
 
     def __len__(self):
         return len(self.data)
 
     def collate_fn(self, batch):
-        images, captions, prompts, text_labels, image_paths, house_jsons = zip(*batch)
-
+        images_batch, captions, prompts, text_labels, image_paths, house_jsons = zip(*batch)
+        # pdb.set_trace()
         if self.args['model'] == 'llava':
             input_ids = []
             attention_mask = []
@@ -538,14 +681,16 @@ class ProcTHOR_image_caption(Dataset):
             attention_mask = torch.stack(attention_mask, dim=0)
             
             new_images = []
-            for image in images:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                # pdb.set_trace()
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                new_images.append(image)
+            for images in images_batch:
+                for image in images:
+                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                    # pdb.set_trace()
+                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                    new_images.append(image)
             
             pixel_values = torch.stack(new_images, dim=0)
 
+            # pdb.set_trace()
             # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
             return_dict = {
                 "input_ids": input_ids,

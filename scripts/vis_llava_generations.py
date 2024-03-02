@@ -47,7 +47,7 @@ def get_top_down_frame(controller):
     return Image.fromarray(top_down_frame)
 
 
-def generate_output_houses(json_path):
+def generate_output_houses(json_path, generate_explanation=False):
 
     output_json = json.load(open(json_path, 'r'))
     image_save_folder = json_path.replace("output.json", "gen_images")
@@ -61,13 +61,15 @@ def generate_output_houses(json_path):
     # pdb.set_trace()
 
     response_rooms = [out_text[0].split(": \n")[-1] for out_text in output_json]
+
+    gt_rooms = [out_text[1] for out_text in output_json]
     
+    failure_explanations = []
     for room_ind, room_response in enumerate(response_rooms):
         print(f"-------------Processing room {room_ind}---------------")
         room_json_text = "\n".join(room_response.split("\n")[:-1])
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
-
         # pdb.set_trace()
         
         try:
@@ -200,6 +202,19 @@ def generate_output_houses(json_path):
             controller.stop()
             continue
         
+        gt_house_json = gt_rooms[room_ind]
+        if gt_house_json != 0:
+            controller_gt = Controller(scene=gt_house_json, width=800,height=800)
+            try:
+                top_down_frame_gt = get_top_down_frame(controller_gt)
+                top_down_frame_gt.save(f"{image_save_folder}/example_top_down_gt_{room_ind}.png")
+            except:
+                print("couldnt get top down frame")
+                controller_gt.stop()
+                continue
+            controller_gt.stop()
+        else:
+            top_down_frame_gt = top_down_frame
         # plot input im/segframe, language and output corner ims in one im
         input_im = exp_path+f"/vis/gt_images_{room_ind}.png"
         out_text = output_json[room_ind]
@@ -218,9 +233,13 @@ def generate_output_houses(json_path):
         plt.imshow(top_down_frame)
         plt.title("Top Down View")
         plt.axis('off')
+        plt.subplot(3, 3, 3)
+        plt.imshow(top_down_frame_gt)
+        plt.title("GT Top Down View")
+        plt.axis('off')
         for corner_ind, corner in enumerate(corner_positions[:6]):
             if os.path.exists(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png"):
-                plt.subplot(3, 3, 3+corner_ind)
+                plt.subplot(3, 3, 4+corner_ind)
                 plt.imshow(Image.open(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png"))
                 plt.title(f"Corner {corner_ind}")
                 plt.axis('off')
@@ -228,13 +247,23 @@ def generate_output_houses(json_path):
         plt.savefig(f"{format_results_folder}/example_{room_ind}.png")
         plt.close()
 
+        if generate_explanation:
+            gt_program_text = ai2thor_utils.generate_program_from_roomjson(gt_house_json)
+            failure_sentence = f"To generate a room that looks like this image: <image>, the predicted program was {room_json_text}. This generated a room with top-down view like this image: <image>. The refined program would be: {gt_program_text}"
+            failure_explanations.append((failure_sentence, input_im, f"{image_save_folder}/example_top_down_{room_ind}.png"))
+            # pdb.set_trace()
+
+
         # pdb.set_trace()
         #img = Image.fromarray(controller.last_event.frame)
         #img.save(f"vis/example_{room_ind}.png")
 
         controller.stop()
 
+    if generate_explanation:
+        with open(f"{exp_path}/failure_explanations.json", "w") as f:
+            json.dump(failure_explanations, f)
 
 if __name__=="__main__":
 
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_ade20k/output.json")
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_im_caption_segframes_2ims/output.json", generate_explanation=True)

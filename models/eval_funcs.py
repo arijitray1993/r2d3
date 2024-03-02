@@ -165,8 +165,6 @@ class HouseSemanticSimilarity:
         self.logger.log({"ObjectFinegrainAcc": object_finegrain_acc})
 
 
-        
-
 class HouseJsonSimilarity:
     def __init__(self, args):
         self.sim_scores = []
@@ -177,7 +175,10 @@ class HouseJsonSimilarity:
 
     def update(self, output, gt):
         # compute text sim
-        self.house_jsons.append((output, 0))
+        if 'house_json' in gt:
+            self.house_jsons.append((output, gt['house_json'][0]))    
+        else:
+            self.house_jsons.append((output, 0))
         self.gt_images.append(gt['image_lists'][0])
 
     def compute(self):
@@ -190,27 +191,8 @@ class HouseJsonSimilarity:
         os.makedirs(os.path.join(self.exp_folder, "vis"), exist_ok=True)
         
         for i, image_list in enumerate(self.gt_images):
-            # check if image is PIL or file path
-            if isinstance(image_list[0], str):
-                images = [Image.open(image_path) for image_path in image_list]
-            else:
-                images = image_list
-            
-            # Calculate total width and maximum height
-            total_width = sum(image.width for image in images)
-            max_height = max(image.height for image in images)
+            images = [Image.open(image_path) for image_path in image_list]
 
-            # Create a new blank image with the correct size
-            new_image = Image.new('RGB', (total_width, max_height))
+            for corner_ind, image in enumerate(images):
+                image.save(os.path.join(self.exp_folder, f"vis/gt_images_{corner_ind}_{i}.png"))
 
-            # Paste images into the new image
-            x_offset = 0
-            for image in images:
-                new_image.paste(image, (x_offset, 0))
-                x_offset += image.width
-            
-            image = new_image
-
-            image.save(os.path.join(self.exp_folder, f"vis/gt_images_{i}.png"))
-        
-            

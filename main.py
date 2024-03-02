@@ -291,6 +291,11 @@ def main(cfg: DictConfig):
         # pdb.set_trace()
         print("Lora models loaded...")
 
+        if cfg.get('freeze_vision'):
+            for name, param in lora_model.named_parameters():
+                if "vision" in name:
+                    param.requires_grad = False
+
         for name, param in lora_model.named_parameters():
             if param.requires_grad:
                 print(name, param.numel())

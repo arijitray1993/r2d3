@@ -60,13 +60,16 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
             max_ind = max(done_inds)
     
         if load_progress:
-            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json"))
+            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_split2.json"))
         else:
             image_program_json_data = []
         
         for ind, (program_text, house_json, og_house_json) in enumerate(tqdm.tqdm(program_json_data)):
             
             # if we have to continue from a certain index
+            if ind<4000:
+                continue
+
             if load_progress:
                 # if ind < max_ind: # len(image_program_json_data):
                 #    continue
@@ -257,7 +260,7 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 print("couldnt get top down frame")
             '''
             #pdb.set_trace()
-            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json", "w"))
+            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_split2.json", "w"))
             controller.stop()
 
 
