@@ -15,6 +15,7 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from llava.mm_utils import tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
 from transformers import TextStreamer
 import tqdm
+import yaml
 
 import pdb
 
@@ -51,8 +52,9 @@ def caption_image(image_file, prompt):
 
 if __name__=="__main__":
     # run choice
-    caption_individual = True
+    caption_individual = False
     generate_summary = False
+    caption_individual_top_down = True
 
     model_path = "4bit/llava-v1.5-13b-3GB"
     kwargs = {"device_map": "auto"}
@@ -74,7 +76,7 @@ if __name__=="__main__":
 
     if caption_individual:
         # load the ai2thor apartments, images, and objects dataset
-        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json", "r"))
+        image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_all.json", "r"))
 
         all_house_caption_data = []
         start_ind = len(all_house_caption_data)
@@ -104,15 +106,61 @@ if __name__=="__main__":
 
                 caption = caption_image(os.path.join("/projectnb/ivc-ml/array/research/robotics/ProcTHOR", img), prompt)
 
-                pdb.set_trace()
+                # pdb.set_trace()
 
                 # print(prompt, caption)
-                all_room_captions.append((img, seg_im, caption))
+                all_room_captions.append((img, seg_im, objs, caption))
                 # pdb.set_trace()
         
             all_house_caption_data.append((ind, all_room_captions))
 
             json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_childrenadded_gtobjonly_new.json", "w"))
+
+    if caption_individual_top_down:
+        json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_all.json"))
+
+        # have only the json data we have top down for
+        image_program_data = []
+        for room_data in json_data:
+            all_imgs = room_data[4]
+            if len(all_imgs) < 1:
+                continue
+            if not os.path.exists(all_imgs[0]):
+                continue
+            if not os.path.exists(all_imgs[0].replace(".png", "_topdown.png")):
+                continue
+            if not os.path.exists(all_imgs[0].replace(".png", "_topdown_seg.png")):
+                continue
+            image_program_data.append(room_data)
+
+        all_house_caption_data = []
+        for ind, room_data in enumerate(tqdm.tqdm(image_program_data)):
+            program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
+
+            top_down_img = all_imgs[0].replace(".png", "_topdown.png")
+
+            unique_objs = []
+            for obj_list in all_objs:
+                
+                unique_objs.extend(obj_list)
+
+            unique_objs = list(set(unique_objs))
+
+            house_dict = yaml.load(program_text, Loader=yaml.FullLoader)
+
+            floor_material = house_dict['floor_material']
+            wall_material = house_dict['wall_material'][0]
+
+            obj_prompt = f"The image in view contains these objects: {', '.join(unique_objs)}. Please only use these objects in your description. Avoid using words like RoboTHOR and only use the generic object names."
+
+            prompt = f"This is a top-down image. Can you please write a caption describing how the room looks like - the objects and how many, the wall material and color, and the floor material based on the top-down image? {obj_prompt} "
+
+            caption = caption_image(top_down_img, prompt)
+
+            all_house_caption_data.append((ind, top_down_img, house_json, caption))
+        
+            json.dump(all_house_caption_data, open("../custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_topdown.json", "w"))
+
 
     if generate_summary:
         # load the captions data

@@ -9,7 +9,7 @@ import tqdm
 
 if __name__=="__main__":
 
-    ai2thor_image_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/vis/ai2thor_windowadded/train"
+    ai2thor_image_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/images/train"
     lsun_dataset = load_dataset("pcuenq/lsun-bedrooms")['train']
 
     # load vit large to judge image sim

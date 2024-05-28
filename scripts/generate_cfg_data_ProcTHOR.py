@@ -49,40 +49,46 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
         # pdb.set_trace()
         program_json_data = json.load(open(program_json_data_path))
         #except:
-
-        done_inds = [int(im_ind.split(".")[0].split("_")[1]) for im_ind in os.listdir(image_save_folder)]
-        done_inds = list(set(done_inds))
-
-    
-        if len(done_inds) == 0:
-            max_ind = 0
-        else:
-            max_ind = max(done_inds)
-    
+        save_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_split9.json"
         if load_progress:
-            image_program_json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json"))
-        else:
-            image_program_json_data = []
-        
+            done_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_split5.json"
+            image_program_json_data = json.load(open(done_path))
+
+            done_inds = []
+            for program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name in image_program_json_data:
+                if len(all_imgs) > 0:
+                    apartment_ind = all_imgs[0].split("/")[-2].split("_")[-1]
+                    done_inds.append(int(apartment_ind))
+            
+            if save_path == done_path:
+                print("Warning, might overwrite the same file, exiting")
+                return
+        # else:
+        image_program_json_data = []
+
         for ind, (program_text, house_json, og_house_json) in enumerate(tqdm.tqdm(program_json_data)):
             
+            if ind>=4000:
+                break
+
             # if we have to continue from a certain index
             if load_progress:
                 # if ind < max_ind: # len(image_program_json_data):
                 #    continue
-                if ind < len(image_program_json_data):
-                    continue
+                #if ind < len(image_program_json_data):
+                #    continue
 
-                if ind in done_inds:
+                if ind <= max(done_inds):
                     continue
-
+                    
+            # pdb.set_trace()
             if ind in [5, 11, 23, 32]: # everything crashes unexpectedly for these, to do look into later
                 continue
             # pdb.set_trace()
             # render the json
             
             try:
-                controller = Controller(scene=house_json, width=800, height=800, renderInstanceSegmentation=True, visibilityDistance=30)
+                controller = Controller(scene=house_json, width=800, height=800, renderInstanceSegmentation=True, visibilityDistance=2)
                 # pdb.set_trace()
             except:
                 print("Cannot render environment, continuing")
@@ -128,6 +134,8 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
             all_imgs = []
             all_objs = []
             all_seg_frames = []
+            if not os.path.exists(f"{image_save_folder}/example_{ind}"):
+                os.makedirs(f"{image_save_folder}/example_{ind}")
             for corner_ind, corner in enumerate(corner_positions):
                 prev_ind = (corner_ind-1)%len(corner_positions)
                 next_ind = (corner_ind+1)%len(corner_positions)
@@ -189,21 +197,26 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 # check if position is in polygon
                 if not shape_polygon.contains(Point(position['x'], position['z'])):
                     print("not in polygon")
-                    controller.stop()
+                    # controller.stop()
                     continue             
                 
                 try:
                     event = controller.step(action="Teleport", position=position, rotation=rotation)
                 except:
                     print("teleport failed")
-                    controller.stop()
+                    # controller.stop()
                     continue
+                
+                if not event.metadata['lastActionSuccess']:
+                    print("teleport failed")
+                    continue 
+
 
                 img = Image.fromarray(controller.last_event.frame)
-                img.save(f"{image_save_folder}/example_{ind}_{corner_ind}.png")
+                img.save(f"{image_save_folder}/example_{ind}/{corner_ind}.png")
 
                 cam_ind_to_position[corner_ind] = (position, rotation)
-                all_imgs.append(f"{image_save_folder}/example_{ind}_{corner_ind}.png")
+                all_imgs.append(f"{image_save_folder}/example_{ind}/{corner_ind}.png")
 
                 ''' this suddenly stopped working in ai2thor
                 objects = []
@@ -241,9 +254,9 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
 
                 # save segmentation frame
                 seg_img = Image.fromarray(segmentation_frame)
-                seg_img.save(f"{image_save_folder}/example_{ind}_{corner_ind}_seg.png")
+                seg_img.save(f"{image_save_folder}/example_{ind}/{corner_ind}_seg.png")
 
-                all_seg_frames.append(f"{image_save_folder}/example_{ind}_{corner_ind}_seg.png")
+                all_seg_frames.append(f"{image_save_folder}/example_{ind}/{corner_ind}_seg.png")
                 # pdb.set_trace()
 
 
@@ -257,7 +270,7 @@ def render_room_program_images(program_json_data_path, image_save_folder="", loa
                 print("couldnt get top down frame")
             '''
             #pdb.set_trace()
-            json.dump(image_program_json_data, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded.json", "w"))
+            json.dump(image_program_json_data, open(save_path, "w"))
             controller.stop()
 
 
@@ -298,4 +311,4 @@ if __name__=="__main__":
     im_folder_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/images/train"
     program_json_data_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_10k_room_json_programs_train_windowsadded_format.json"
 
-    render_room_program_images(program_json_data_path, image_save_folder=im_folder_path, load_progress=False)
+    render_room_program_images(program_json_data_path, image_save_folder=im_folder_path, load_progress=True)
