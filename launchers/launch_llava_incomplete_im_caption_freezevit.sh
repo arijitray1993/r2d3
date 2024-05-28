@@ -12,4 +12,4 @@
 
 cd /projectnb/ivc-ml/array/research/robotics/dreamworlds/
 conda activate llava
-python -m accelerate.commands.launch --num_processes=2 main.py exp_name=llava_incomplete_im_caption_freezevit
+python -m accelerate.commands.launch --num_processes=1 main.py exp_name=llava_incomplete_im_caption_freezevit

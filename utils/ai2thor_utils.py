@@ -306,6 +306,146 @@ wall_material: {wall_material_tokens}
     
     return program_text
 
+
+def generate_program_from_roomjson_holodeckeval(house_json, include_objects=True, include_windows=True, include_children=True):
+    # this takes the json of just a one room house and make a program for the room.
+    # for each room, we need polygon, floor material, wall materials, and objects at location and rotation
+   
+    room_id = house_json['rooms'][0]['id']
+    # get polygon
+    polygon = house_json['rooms'][0]['floorPolygon']
+
+    # get max dimensions
+    max_dim_x = max([point['x'] for point in polygon])
+
+    # max y_dim from wall height
+    max_dim_y = 0
+    for wall in house_json['walls']:
+        for point in wall['polygon']:
+            if point['y'] > max_dim_y:
+                max_dim_y = point['y']
+    
+    max_dim_z = max([point['z'] for point in polygon])
+
+    # pdb.set_trace()
+    # get floor material
+    floor_material = house_json['rooms'][0]['floorMaterial']['name']
+    
+    # tokenize polygon, floor material, and wall materials
+    polygon_tokens = tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z)
+    # pdb.set_trace()
+    floor_material_token = floor_material
+
+    wall_materials = []
+    for wall in house_json['walls']:
+        if wall['roomId'] == room_id:
+            wall_materials.append(wall['material']['name'])
+    wall_material_tokens = wall_materials
+
+    # get objects
+    shapely_polygon = Polygon([(room_point['x'], room_point['z']) for room_point in polygon])
+    objects = []
+    for obj in house_json['objects']:
+        # use shapely polygon to check if the object is inside the room
+        point = Point(obj['position']['x'], obj['position']['z'])
+        if shapely_polygon.contains(point):
+            objects.append(obj)
+    
+    # get windows
+    windows=[]
+    for ind, window in enumerate(house_json['windows']):
+        window_token = window['assetId']
+        window_position = get_token_from_coordinate(window['assetPosition']['x'], window['assetPosition']['y'], window['assetPosition']['z'], max_dim_x, max_dim_y, max_dim_z)
+        window_polygon = tokenize_polygon(window['holePolygon'], max_dim_x, max_dim_y, max_dim_z)
+        window_wall = window['wall0']
+
+        # find the window wall in program text
+        # window_wall_program_id = wall_id_to_programid[window_wall]
+        program_window_entry = (window_token, window_position, window_polygon, window_wall)
+        windows.append(program_window_entry)
+    
+    # make a program
+    # max_dims: [{max_dim_x}, {max_dim_y}, {max_dim_z}]
+    program_text = f"""
+polygon: {polygon_tokens}
+floor_material: '{floor_material_token}'
+wall_material: {wall_material_tokens}
+"""
+    if include_objects:
+        for ind, obj in enumerate(objects):
+            obj_token = obj['assetId']
+            obj_name = obj.get('object_name')
+            if obj_name is None:
+                obj_name = obj['id']
+            
+            obj_name = obj_name.split("|")[0]
+            obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+            obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'])
+            obj_id = obj['id']
+            # pdb.set_trace()
+            obj_entry_dict = (obj_name, obj_position, obj_rotation)
+            program_text += f"\nobj_{ind}: {obj_entry_dict}"
+
+            if 'children' in obj and include_children:
+                for child_ind, child in enumerate(obj['children']):
+                    child_token = child['assetId']
+                    child_name = child.get('object_name')
+                    if child_name is None:
+                        child_name = child['id']
+                    
+                    child_name = child_name.split("|")[0]
+                    child_position = get_token_from_coordinate(child['position']['x'], child['position']['y'], child['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+                    child_rotation = get_token_from_rotation(child['rotation']['x'], child['rotation']['y'], child['rotation']['z'])
+                    child_parent_id = f"obj_{ind}"
+                    child_entry_dict = (child_name, child_position, child_rotation, child_parent_id)
+                    program_text += f"\nchild_{child_ind}: {child_entry_dict}"
+    
+    if include_windows:
+        for ind, window in enumerate(windows):
+            program_text += f"\nwindow_{ind}: {window}"
+
+    #### actually execute the program text to get the house json
+    program_text = program_text.replace("(", "[")
+    program_text = program_text.replace(")", "]")
+    
+    return program_text
+
+
+def generate_program_from_polygon_objects(polygon, floor_material_token, wall_material_token, objects, include_windows=False):
+    
+    polygon_tokens = tokenize_polygon(polygon, 8, 8, 8)
+
+    #floor_material_token= 'WoodFineDarkFloorsRedNRM1'
+    #wall_material_tokens = ['PureWhite']*len(polygon_tokens)
+
+    # make a program
+    program_text = f"""
+polygon: {polygon_tokens}
+"""
+
+    for ind, obj in enumerate(objects):
+        obj_token = obj['assetId']
+        obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'], 8, 8, 8)
+        obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'])
+        obj_id = obj['id']
+        # pdb.set_trace()
+        obj_entry_dict = (obj_token, obj_position, obj_rotation)
+        program_text += f"\nobj_{ind}: {obj_entry_dict}"
+    
+    if include_windows:
+        for ind, window in enumerate(windows):
+            program_text += f"\nwindow_{ind}: {window}"
+
+    #### actually execute the program text to get the house json
+    program_text = program_text.replace("(", "[")
+    program_text = program_text.replace(")", "]")
+    
+    return program_text
+
+
+
+
+
 def format_program(program_text):
 
     # remove the child from program for now since it doesn't work
@@ -494,7 +634,7 @@ class House:
                 },
                 {
                     "id": "light_2",
-                    "intensity": 0.45,
+                    "intensity": 0.85,
                     "position": {
                     "x": 3.9899999999999998,
                     "y": 4.351928794929904,
@@ -678,13 +818,17 @@ class House:
 def make_house_from_cfg(cfg):
     '''
     cfg is a string like:
-    max_dims: [8, 8, 8]
-    polygon: [[0, 0, 0], [0, 0, 15], [15, 0, 15], [15, 0, 0]] # note there are no parantheses, only square brackets
-    floor_material: LightWoodCounters3
-    wall_material: ['PureWhite', 'PureWhite', 'PureWhite', 'PureWhite']
-    window_0: ['Window_Fixed_60x48', [1,1,1], [[0, 0, 0], [0, 0, 15]], 0]  # asset_id, position, polygon, wall_id
-    obj_0: ['Toilet_2', [1, 1, 1], [0, 0, 0]]
-    obj_1: ['Sink_26', [5, 1, 1], [0, 0, 0]]
+    polygon: [[358, 0, 358], [358, 0, 894], [894, 0, 894], [894, 0, 0], [536, 0, 0], [536, 0, 358]]
+    floor_material: 'WoodFineDarkFloorsRedNRM1'
+    wall_material: ['PureWhite', 'PureWhite', 'PureWhite', 'PureWhite', 'PureWhite', 'PureWhite'] # the wall ids are in order of the polygon points 0 to n.
+
+    obj_0: ['TV_Stand_206_3', [861, 38, 63], [0, 270, 0]] # asset id, position, rotation
+    obj_1: ['Cart_1', [636, 64, 666], [0, 0, 0]]
+    obj_2: ['Dining_Table_221_1', [852, 39, 802], [0, 270, 0]]
+    obj_3: ['RoboTHOR_sofa_vreta', [579, 36, 91], [0, 90, 0]]
+    obj_4: ['Wall_Decor_Photo_1V', [892, 161, 863], [0, 270, 0]]
+    obj_5: ['Wall_Decor_Photo_1', [892, 191, 137], [0, 270, 0]]
+    window_0: ['Window_Hung_48x24', [101, 150, 0], [[40, 117, 0], [162, 183, 0]], 5] # assetid, position, window polygon, wallid
 
     outputs a room (not a house really) json that can be used with the Controller in AI2thor. 
     '''
@@ -692,7 +836,7 @@ def make_house_from_cfg(cfg):
     # get dictionary from yaml-like string
     cfg_dict = yaml.load(cfg, Loader=yaml.FullLoader)
 
-    #get max dimensions
+    # get max dimensions
     floor_polygon = cfg_dict['polygon']
     floor_material = cfg_dict['floor_material']
     wall_material = cfg_dict['wall_material']

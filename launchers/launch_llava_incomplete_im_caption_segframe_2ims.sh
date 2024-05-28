@@ -2,7 +2,7 @@
 
 #$ -pe omp 4
 #$ -P ivc-ml
-#$ -l h_rt=18:00:00
+#$ -l h_rt=20:00:00
 #$ -l gpus=2
 #$ -l gpu_memory=48G
 #$ -N llava_incomplete_im_caption_segframes_2ims

@@ -2,9 +2,9 @@
 
 #$ -pe omp 3
 #$ -P ivc-ml
-#$ -l h_rt=8:00:00
+#$ -l h_rt=36:00:00
 #$ -l gpus=1
-#$ -l gpu_memory=48G
+#$ -l gpu_memory=24G
 #$ -N llava_summaries
 #$ -j y
 #$ -m ea

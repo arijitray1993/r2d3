@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 from peft import LoraConfig, get_peft_model
 from peft import PeftConfig, PeftModel
 from peft import prepare_model_for_kbit_training
-
+import gc
 import time
 import numpy as np
 import random
@@ -42,10 +42,13 @@ torch.cuda.manual_seed_all(seed)
 np.random.seed(seed)
 random.seed(seed)
 
+def rename_attribute(obj, old_name, new_name):
+    obj._modules[new_name] = obj._modules.pop(old_name)
 
 class GenericModule():
     def __init__(
         self,
+        cfg,
         model,
         model_input_choice,
         train_dataloader, 
@@ -63,6 +66,7 @@ class GenericModule():
         num_eval_steps = 5,
     ):
         super().__init__()
+        self.cfg = cfg
         self.model = model
         self.logger = logger
         self.exp_name = exp_name
@@ -121,9 +125,28 @@ class GenericModule():
         for epoch in range(self.num_epochs):
             for batch in self.train_dataloader:
                 #outputs = self.model.forward(*[batch[inp] for inp in self.model_input_choice])
-
+                # try:
+                # pdb.set_trace()
                 outputs = self.model.forward(**{inp: batch[inp] for inp in self.model_input_choice})
+                #except:
+                #    print("Error in forward pass. Skipping step...")
+                #    # clear cuda memory
+                #    torch.cuda.empty_cache()
+                #    gc.collect()
+                #    continue
                 loss = outputs.loss
+
+                if self.cfg.get("use_feature_loss"):
+                    # pdb.set_trace()
+                    feature_loss = outputs["im_feature_loss"]
+                    total_loss = self.cfg.feature_lambda * feature_loss + (1-self.cfg.feature_lambda) * loss
+                    loss = total_loss
+
+                # check if loss is nan
+                if math.isnan(loss.item()):
+                    # pdb.set_trace()
+                    print("Loss is nan. Skipping step...")
+                    continue
                 self.accelerator.backward(loss)
 
                 self.optimizer.step()
@@ -135,7 +158,7 @@ class GenericModule():
                 self.logger.log({"train_loss": loss.item(), "step": self.global_step})
 
                 # validate at certain intervals
-                if self.global_step % self.eval_every == 0 and epoch>0:
+                if (self.global_step % self.eval_every == 0) and epoch>0:
                     self.validate()
                 
                     # compute metrics after running all eval loop
@@ -148,11 +171,13 @@ class GenericModule():
     def validate(self,):
         progress_bar = tqdm.tqdm(range(len(self.test_dataloader)))
         count = 0
+        self.model.eval()
         for batch in self.test_dataloader:
             #self.model_outputs = self.model.forward(
             #    *[batch[inp] for inp in self.model_input_choice]
             #)
-            generated_ids = self.model.generate(**{inp: batch[inp] for inp in self.model_input_choice})
+            with torch.no_grad():
+                generated_ids = self.model.generate(**{inp: batch[inp] for inp in self.model_input_choice})
 
             generated_ids[generated_ids==-200] = 1
             generated_text = self.test_dataloader.dataset.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
@@ -163,6 +188,7 @@ class GenericModule():
             print("Ground truth text: ")
             print(batch["text_labels"][0])
 
+            # pdb.set_trace()
             for entry in self.metrics:
                 metric_name = entry[0]
                 
@@ -185,6 +211,7 @@ class GenericModule():
 
         if not self.eval_only:
             self.save_model()
+        self.model.train()
 
     def save_model(self,):
         # save the huggingface model locally
@@ -256,16 +283,38 @@ def main(cfg: DictConfig):
     # =========== Define training choices ===========================
     if cfg.eval_only:
         model.eval()  # turns batch norm off.
-
+    
+    # pdb.set_trace()
     if cfg.get("tune_lora"):
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            target_modules=["q_proj", "v_proj"],
-            lora_dropout=0.1,
-            bias="none",
-            modules_to_save=[], #["embed_tokens", "lm_head"],
-        )
+
+        if "3D" in cfg.model_choice:
+
+            lora_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                target_modules=["q_proj", "v_proj"],
+                lora_dropout=0.1,
+                bias="none",
+                modules_to_save=["encoder_3d"],
+            )
+        elif 'Dino' in cfg.model_choice:
+            lora_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                target_modules=["q_proj", "v_proj"],
+                lora_dropout=0.1,
+                bias="none",
+                modules_to_save=["transformer_encoder_block", "feat_projection", "mm_projector"],
+            ) 
+        else:
+            lora_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                target_modules=["q_proj", "v_proj"],
+                lora_dropout=0.1,
+                bias="none",
+                modules_to_save=[],
+            )
 
         #model.model.gradient_checkpointing_enable()
         #model.model = prepare_model_for_kbit_training(model.model)
@@ -279,22 +328,33 @@ def main(cfg: DictConfig):
                 # go through the dict and set lora layers to requuires grad True
                 
                 for name, param in lora_model.named_parameters():
-                    if ("q_proj" in name or "v_proj" in name) and ('weight' in name) and ('default' in name):
+                    set_grad =  ("q_proj" in name or "v_proj" in name) and ('weight' in name or 'bias' in name) and ('default' in name)
+                    for module in lora_config.modules_to_save:
+                        if module in name:
+                            set_grad = True
+                    if set_grad:
                         # pdb.set_trace()
                         param.requires_grad = True
                     else:
                         param.requires_grad = False
-
+            else:
+                for name, param in lora_model.named_parameters():
+                    param.requires_grad = False
         else:
             lora_model = get_peft_model(model, lora_config)
             lora_model = lora_model.half()
+
         # pdb.set_trace()
         print("Lora models loaded...")
 
         if cfg.get('freeze_vision'):
-            for name, param in lora_model.named_parameters():
-                if "vision" in name:
-                    param.requires_grad = False
+            model_og = getattr(models, cfg.model_choice)(cfg.model_init_args)
+            lora_model.model.model.model.vision_tower = model_og.model.model.vision_tower
+            lora_model.model.model.model.vision_tower.requires_grad = False
+        
+        #if cfg.get('offload_vision'):
+        #    lora_model.model.model.model.vision_tower.cpu()
+
 
         for name, param in lora_model.named_parameters():
             if param.requires_grad:
@@ -305,9 +365,12 @@ def main(cfg: DictConfig):
 
         total_params = sum(param.numel() for param in lora_model.parameters() if param.requires_grad)
         print(f"    Trainable params: {total_params}")
+
+        # pdb.set_trace()
         
         # === training module ===
         training_module = GenericModule(
+            cfg=cfg,
             model=lora_model,
             model_input_choice=cfg.model_input_choice,
             metrics=cfg.metrics,
@@ -340,6 +403,7 @@ def main(cfg: DictConfig):
 
         # === training module ===
         training_module = GenericModule(
+            cfg=cfg,
             model=model,
             model_input_choice=cfg.model_input_choice,
             metrics=cfg.metrics,

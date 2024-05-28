@@ -21,12 +21,15 @@ from minigpt4.tasks import *
 '''
 
 from transformers import StoppingCriteria, StoppingCriteriaList
-sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
+from transformers import LlamaForCausalLM, CodeLlamaTokenizer
+from transformers import CLIPVisionModel, CLIPImageProcessor
+
+# sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
+sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
 from llava.eval.run_llava import eval_model
 from llava.mm_utils import KeywordsStoppingCriteria
-#from transformers import LlamaForCausalLM, CodeLlamaTokenizer
 
 
 class Blip2ModelInterface(nn.Module):
@@ -73,8 +76,430 @@ class InstructBlipModelInterface(nn.Module):
 
         return outputs
 
-class LlavaModelInterface(nn.Module):
+
+class DinoProjector(nn.Module):
     def __init__(self, args):
+        super().__init__()
+
+        self.model = DINO.load_pretrained("dino_vit_base8_384", num_classes=0, use_projection=True)
+        self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+    def forward(self, pixel_values):
+        with torch.no_grad():
+            features = self.model(pixel_values)
+        return features
+
+
+
+class LlavaModelLiteInterface(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        model_path = "liuhaotian/llava-v1.5-7b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            encode_lite=True,
+            # load_8bit=True
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            use_lite=True,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria], 
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None,):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask, 
+            use_lite=True)
+        # pdb.set_trace()
+
+        return outputs
+    
+class LlavaModelDinoInterface(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        # model_path = "liuhaotian/llava-v1.5-7b"
+        model_path = "liuhaotian/llava-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            use_dino=True,
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None,):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+
+        return outputs
+
+
+class CLIPEncoderCameraPolygon(nn.Module):
+    def __init__(self, vision_tower):
+        super().__init__()
+        self.is_loaded = False
+        self.vision_tower_name = vision_tower
+    
+    def load_model(self, device_map=None):
+        self.image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        self.vision_tower = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
+
+        encoder = nn.TransformerEncoderLayer(
+            1024, 4, batch_first=True
+        )
+        self.transformer_encoder_block = nn.TransformerEncoder(
+            encoder, 2
+        )
+
+        # self.feat_projection = nn.Sequential(nn.Linear(768, 1024), nn.Tanh())
+
+        self.cls_cam = nn.Parameter(torch.randn(1, 1, 1024))
+        self.cls_poly = nn.Parameter(torch.randn(1, 1, 1024))
+        self.cls_im = nn.Parameter(torch.randn(1, 1, 1024))
+
+        self.cam_projection = nn.Sequential(nn.Linear(3, 1024), nn.Tanh())
+        self.poly_projection = nn.Sequential(nn.Linear(2, 1024), nn.Tanh())
+
+        self.is_loaded = True
+        self.loss = nn.MSELoss()
+
+
+    def forward(self, image_processed, cameraposition, polygon, gt_im_features=None):
+        # with torch.no_grad():
+        outputs = self.vision_tower(image_processed.to(device=self.device, dtype=self.dtype))
+
+        # pdb.set_trace()
+        image_features = outputs[0]
+
+        # image_features = self.transformer_encoder_block(image_features)
+        image_features = image_features[:, 1:, :]
+
+        cam_feats = self.cam_projection(cameraposition.to(dtype=self.dtype, device=self.device))
+        poly_feats = self.poly_projection(polygon.to(dtype=self.dtype, device=self.device)).squeeze()
+        
+        cat_feats = torch.cat([self.cls_cam, cam_feats, self.cls_poly, poly_feats, self.cls_im, image_features.unsqueeze(0)], dim=1)
+
+        image_features = self.transformer_encoder_block(cat_feats)
+
+        image_features = image_features[:, 0:1, :]
+
+        if gt_im_features is not None:
+            loss = self.loss(image_features, gt_im_features)
+        
+        # pdb.set_trace()
+        return image_features
+    
+    @property
+    def dtype(self):
+        return self.vision_tower.dtype
+
+    @property
+    def device(self):
+        return self.vision_tower.device
+
+    @property
+    def hidden_size(self):
+        return 1024
+
+    @property
+    def num_patches(self):
+        return 1
+
+
+class LlavaModelCLIPCameraPolygonInterface(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        # model_path = "liuhaotian/llava-v1.5-7b"
+        model_path = "liuhaotian/llava-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            use_clip_camera_polygon=True,
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None, camera_pos=None, polygon=None, gt_im_features=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            camera_pos=camera_pos,
+            polygon=polygon,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None, camera_pos=None, polygon=None, gt_im_features=None):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            gt_im_features=gt_im_features,
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask,
+            camera_pos=camera_pos,
+            polygon=polygon, 
+            output_im_features=True)
+        # pdb.set_trace()
+
+        return outputs
+
+
+
+    
+class LlavaModelDinoCameraPolygonInterface(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        # model_path = "liuhaotian/llava-v1.5-7b"
+        model_path = "liuhaotian/llava-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            use_dino_camera_polygon=True,
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None, camera_pos=None, polygon=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            camera_pos=camera_pos,
+            polygon=polygon,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None, camera_pos=None, polygon=None):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask,
+            camera_pos=camera_pos,
+            polygon=polygon)
+        # pdb.set_trace()
+
+        return outputs
+    
+class LlavaModelDinoInterface_FeatureLoss(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        # model_path = "liuhaotian/llava-v1.5-7b"
+        model_path = "liuhaotian/llava-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            use_dino_camera_polygon=True,
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None, camera_pos=None, polygon=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            camera_pos=camera_pos,
+            polygon=polygon,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None, output_im_features=True, gt_im_features=None, camera_pos=None, polygon=None):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask, 
+            camera_pos=camera_pos,
+            polygon=polygon,
+            output_im_features=output_im_features)
+        # pdb.set_trace()
+
+        return outputs
+
+
+class LlavaModel_13B_Interface(nn.Module):
+
+    def __init__(self, args):
+        
+        super().__init__()
+        model_path = "liuhaotian/llava-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            # load_8bit=True
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values=None, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+        
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        # pdb.set_trace()
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values=None, attention_mask=None, labels=None,):
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values,
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+        
+        return outputs
+
+
+class LlavaModelInterface(nn.Module):
+
+    def __init__(self, args):
+        
         super().__init__()
         model_path = "liuhaotian/llava-v1.5-7b"
 
@@ -119,6 +544,111 @@ class LlavaModelInterface(nn.Module):
             attention_mask=attention_mask)
         # pdb.set_trace()
         
+        return outputs
+    
+
+class LlavaModel_16V_Interface(nn.Module):
+
+    def __init__(self, args):
+        
+        super().__init__()
+        model_path = "liuhaotian/llava-v1.6-vicuna-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            # load_8bit=True
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, attention_mask, labels=None,):
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+        
+        return outputs
+
+
+class Llava3DModelInterface(nn.Module):
+
+    def __init__(self, args):
+
+        super().__init__()
+        model_path = "liuhaotian/llava-v1.5-7b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            encoder_multiview=True,
+            # load_8bit=True
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values, camera_pos, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        # pdb.set_trace()
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            camera_pos = camera_pos,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values, camera_pos, attention_mask, labels=None,):
+        outputs =  self.model.forward(
+            input_ids,
+            images=pixel_values.to(self.model.dtype),
+            camera_pos = camera_pos,
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+        # pdb.set_trace()
         return outputs
 
 
@@ -171,8 +701,11 @@ class LlavaModelAggImgInterface(nn.Module):
 class CodeLLamaInterface(nn.Module):
     def __init__(self, args):
         super().__init__()
-        self.model = LlamaForCausalLM.from_pretrained("codellama/CodeLlama-7b-hf")
+        self.model = LlamaForCausalLM.from_pretrained("codellama/CodeLlama-13b-hf")
         self.max_new_tokens = args['max_new_tokens']
+
+        self.tokenizer = CodeLlamaTokenizer.from_pretrained("codellama/CodeLlama-13b-hf")
+        self.image_processor = None
 
     def forward(self, input_ids, attention_mask, labels):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
