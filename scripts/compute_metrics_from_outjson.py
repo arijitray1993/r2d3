@@ -21,7 +21,7 @@ api_key = "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"
 def compute_metrics_from_json(json_file, logger):
 
     data = json.load(open(json_file))
-
+    print("Number of samples: ", len(data))
     # initialize metrics
     args = {}
     args['logger'] = logger
@@ -29,6 +29,7 @@ def compute_metrics_from_json(json_file, logger):
     obj_distance_accs = eval_funcs.HouseObjectDistancesAccuracy(args)
     selected_obj_accs = eval_funcs.HouseSelectedObjAccuracy(args)
     selected_obj_dists = eval_funcs.HouseSelectedObjectDistancesAccuracy(args)
+    obj_attr_accs = eval_funcs.AttributeObjectMetrics(args)
 
     for output, house_json, gt_house_dict, gt_text_labels in data:
 
@@ -46,18 +47,20 @@ def compute_metrics_from_json(json_file, logger):
             gt['objs_present'] = gt_house_dict['objs_present']
 
         # compute metrics
-        obj_accs.update(output, gt)
-        obj_distance_accs.update(output, gt)
-        if 'objs_present' in gt_house_dict:
-          selected_obj_accs.update(output, gt)
-          selected_obj_dists.update(output, gt)
+        #obj_accs.update(output, gt)
+        #obj_distance_accs.update(output, gt)
+        obj_attr_accs.update(output, gt)
+        #if 'objs_present' in gt_house_dict:
+        #  selected_obj_accs.update(output, gt)
+        #  selected_obj_dists.update(output, gt)
 
     # Compute the metrics
-    obj_accs.compute()
-    obj_distance_accs.compute()
-    if 'objs_present' in gt_house_dict:
-      selected_obj_accs.compute()
-      selected_obj_dists.compute()
+    #obj_accs.compute()
+    #obj_distance_accs.compute()
+    obj_attr_accs.compute()
+    #if 'objs_present' in gt_house_dict:
+    #  selected_obj_accs.compute()
+    #  selected_obj_dists.compute()
 
 
 def get_json_from_text(output):
@@ -246,7 +249,7 @@ def compute_image_caption_metrics(json_file, logger, eval_caption_sim=False):
 
 if __name__=="__main__":
     
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_yuvdepth_campolygon_orientlanguage/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygonangle_nomarksbaseline/output.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()
@@ -258,8 +261,3 @@ if __name__=="__main__":
     # compute_image_caption_metrics(json_file, logger, eval_caption_sim=False)
     
     
-
-
-
-
-

@@ -61,6 +61,8 @@ if __name__ == "__main__":
         if len(all_imgs) == 0:
             continue
 
+        if ind < 4000:
+            continue
 
         apartment_id = all_imgs[0].split("/")[-2]
 
@@ -284,6 +286,6 @@ if __name__ == "__main__":
 
         controller.stop()
     
-        json.dump(all_im_qas, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/depth_reasoning_qas.json", "w"))
+        json.dump(all_im_qas, open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/depth_reasoning_qas_split2.json", "w"))
 
        

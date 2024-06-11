@@ -77,7 +77,8 @@ def generate_output_houses(json_path, generate_explanation=False):
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
         # pdb.set_trace()
-        
+    
+
         try:
             house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
         except:
@@ -85,7 +86,7 @@ def generate_output_houses(json_path, generate_explanation=False):
             continue
         house_json = house_json.house_json
         try:
-            controller = Controller(width=800, height=800, quality="High WebGL", scene="Procedural", gridSize=0.25,) # renderInstanceSegmentation=True)
+            controller = Controller(width=800, height=800, quality="High WebGL", scene="Procedural", gridSize=0.1) # renderInstanceSegmentation=True)
             controller.step(action="CreateHouse", house=house_json)
         except:
             print("not a valid house json")
@@ -216,7 +217,8 @@ def generate_output_houses(json_path, generate_explanation=False):
                     print("teleport failed")
                     num_tries+=1
                     success = 0
-                
+            
+            # pdb.set_trace()
 
             img = Image.fromarray(controller.last_event.frame)
             img.save(f"{image_save_folder}/example_{room_ind}_{corner_ind}.png")
@@ -299,4 +301,4 @@ def generate_output_houses(json_path, generate_explanation=False):
 
 if __name__=="__main__":
 
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_yuvdepth_campolygon_orientlanguage/output.json", generate_explanation=False)
+    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_caption_campolygon_orientlanguage/output.json", generate_explanation=False)

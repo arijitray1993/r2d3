@@ -2,7 +2,7 @@
 
 #$ -pe omp 4
 #$ -P ivc-ml
-#$ -l h_rt=36:00:00
+#$ -l h_rt=14:00:00
 #$ -l gpus=2
 #$ -l gpu_memory=48G
 #$ -l gpu_type=L40S|L40|A6000

@@ -11,6 +11,10 @@ import shapely
 from scipy.optimize import linear_sum_assignment
 import re
 import ast
+import torch.nn.functional as F
+
+from torch import Tensor
+from transformers import AutoTokenizer, AutoModel
 
 class GenHouseIms:
 
@@ -53,6 +57,111 @@ def compute_location_error(pred_locations, gt_locations, max_dimension):
     #print(cluster_to_label_map)
 
     return mean_dist, np.mean(accuracy)
+
+def average_pool(last_hidden_states, attention_mask):
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+def compute_locationposeattr_error(pred_locations, gt_locations, max_dimension, attrmodel, attrtokenizer):
+
+    # first we create a cost matrix that calculates distance between pred dist and gt dist
+    k_gt = len(gt_locations)
+    k_pred = len(pred_locations)
+    cost_matrix = np.zeros((k_gt, k_pred))
+    pose_matrix = np.zeros((k_gt, k_pred))
+    for i in range(k_gt):
+        for j in range(k_pred):
+            # pdb.set_trace()
+            cost_matrix[i, j] = np.linalg.norm(np.array(pred_locations[j][0]) - np.array(gt_locations[i][0]))
+            pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1][1])) # just rotation around y axis
+    #print(cost_matrix)
+    # then we use linear_sum_assignment to find the best matching between gt and pred
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    #compute the mean of the least mapped distances
+    mean_dist = 0
+    accuracy = []
+    pose_accuracy = []
+    attr_sim = []
+    mean_pose_dist = 0
+    for i in range(len(row_ind)):
+        if cost_matrix[row_ind[i], col_ind[i]]/max_dimension < 0.1:
+            accuracy.append(1)
+            if pose_matrix[row_ind[i], col_ind[i]] < 10:
+                pose_accuracy.append(1)
+            else:
+                pose_accuracy.append(0)
+        else:
+            pose_accuracy.append(0)
+            accuracy.append(0)
+
+        mean_dist += cost_matrix[row_ind[i], col_ind[i]]
+        mean_pose_dist += pose_matrix[row_ind[i], col_ind[i]]
+
+        # compute attribute distance
+        gt_attr = gt_locations[row_ind[i]][-1]
+        pred_attr = pred_locations[col_ind[i]][-1]
+
+        # compute attribute similarity
+        batch_dict = attrtokenizer([gt_attr, pred_attr], max_length=512, padding=True, truncation=True, return_tensors='pt')
+
+        outputs = attrmodel(**batch_dict)
+        embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
+
+        # normalize embeddings
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+        scores = (embeddings[:1] @ embeddings[1:].T) * 100
+        attr_sim.append(scores.item())
+        # pdb.set_trace()
+
+
+    mean_dist = mean_dist / len(row_ind)
+
+    #print(cluster_to_label_map)
+
+    return mean_dist, np.mean(accuracy), np.mean(pose_accuracy), mean_pose_dist, np.mean(attr_sim)
+
+
+def compute_locationpose_error(pred_locations, gt_locations, max_dimension):
+    
+    # first we create a cost matrix that calculates distance between pred dist and gt dist
+    k_gt = len(gt_locations)
+    k_pred = len(pred_locations)
+    cost_matrix = np.zeros((k_gt, k_pred))
+    pose_matrix = np.zeros((k_gt, k_pred))
+    for i in range(k_gt):
+        for j in range(k_pred):
+            cost_matrix[i, j] = np.linalg.norm(pred_locations[j][0] - gt_locations[i][0])
+            pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1][1])) # just rotation around y axis
+    #print(cost_matrix)
+    # then we use linear_sum_assignment to find the best matching between gt and pred
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    #compute the mean of the least mapped distances
+    mean_dist = 0
+    accuracy = []
+    pose_accuracy = []
+    mean_pose_dist = 0
+    for i in range(len(row_ind)):
+        if cost_matrix[row_ind[i], col_ind[i]]/max_dimension < 0.1:
+            accuracy.append(1)
+            if pose_matrix[row_ind[i], col_ind[i]] < 10:
+                pose_accuracy.append(1)
+            else:
+                pose_accuracy.append(0)
+        else:
+            pose_accuracy.append(0)
+            accuracy.append(0)
+
+        mean_dist += cost_matrix[row_ind[i], col_ind[i]]
+        mean_pose_dist += pose_matrix[row_ind[i], col_ind[i]]
+
+    mean_dist = mean_dist / len(row_ind)
+
+    #print(cluster_to_label_map)
+
+    return mean_dist, np.mean(accuracy), np.mean(pose_accuracy), mean_pose_dist
+
 
 
 def get_object_class_from_asset(obj):
@@ -431,7 +540,12 @@ class HouseSelectedObjAccuracy:
         self.selected_objs = []
         self.object_location_error = []
         self.object_location_accuracy = []
+        self.object_pose_accuracy = []
+        self.object_pose_error = []
         self.object_class_accuracy = []
+        self.object_finegrain_accuracy = []
+        self.object_count_error = []
+        self.object_count_acc = []
         self.logger = args['logger']
         pass
 
@@ -502,7 +616,7 @@ class HouseSelectedObjAccuracy:
                 if f'obj_{i}' not in gt_house:
                     break
                 gt_object, location, rotation = gt_house[f'obj_{i}']
-                gt_objs[gt_object].append(location)
+                gt_objs[gt_object].append((location, rotation))
                 i += 1
             
             pred_objs = defaultdict(list)
@@ -516,7 +630,7 @@ class HouseSelectedObjAccuracy:
                     print("error object")
                     i+=1
                     continue
-                pred_objs[pred_object].append(location)
+                pred_objs[pred_object].append((location, rotation))
                 i += 1
 
             pred_obj_classes = defaultdict(list)
@@ -550,10 +664,36 @@ class HouseSelectedObjAccuracy:
                 pred_loc = np.array(pred_loc).astype(np.float32)
                 gt_loc = np.array(gt_loc).astype(np.float32)
                 
-                mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                mean_dist, accuracy, pose_accuracy, mean_pose_dist = compute_locationpose_error(pred_loc, gt_loc, max_dimension)
                 if obj in selected_obj_classes:
                     self.object_location_accuracy.append(accuracy)
                     self.object_location_error.append(mean_dist/max_dimension)
+                    self.object_pose_accuracy.append(pose_accuracy)
+                    self.object_pose_error.append(mean_pose_dist)
+            
+            for obj in gt_objs:
+                obj_class = get_object_class_from_asset(obj)
+                if obj_class in selected_obj_classes:
+                    if obj in pred_objs:
+                        self.object_finegrain_accuracy.append(1)
+                    else:
+                        self.object_finegrain_accuracy.append(0)
+            
+            for obj in gt_objs:
+                obj_class = get_object_class_from_asset(obj)
+                if obj_class in selected_obj_classes:
+                    if obj in pred_objs:
+                        count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
+                        self.object_count_error.append(count_diff)
+                        if count_diff == 0:
+                            self.object_count_acc.append(1)
+                        else:
+                            self.object_count_acc.append(0)
+                    else:
+                        self.object_count_error.append(len(gt_objs[obj]))
+                        self.object_count_acc.append(0)
+
             
         if len(self.object_location_accuracy) == 0:
             return
@@ -561,10 +701,20 @@ class HouseSelectedObjAccuracy:
         object_class_acc = np.mean(self.object_class_accuracy)
         object_location_err = np.mean(self.object_location_error)
         object_location_acc = np.mean(self.object_location_accuracy)
+        object_pose_acc = np.mean(self.object_pose_accuracy)
+        object_pose_err = np.mean(self.object_pose_error)
+        object_finegrain_acc = np.mean(self.object_finegrain_accuracy)
+        object_count_err = np.mean(self.object_count_error)
+        object_count_acc = np.mean(self.object_count_acc)
 
         self.logger.log({"SelObjectClassAcc": object_class_acc})
         self.logger.log({"SelObjectLocationError": object_location_err})
         self.logger.log({"SelObjectLocationAcc": object_location_acc})
+        self.logger.log({"SelObjectPoseAcc": object_pose_acc})
+        self.logger.log({"SelObjectPoseError": object_pose_err})
+        self.logger.log({"SelObjectFinegrainAcc": object_finegrain_acc})
+        self.logger.log({"SelObjectCountError": object_count_err})
+        self.logger.log({"SelObjectCountAcc": object_count_acc})
 
 
 
@@ -583,6 +733,8 @@ class HouseSemanticSimilarity:
         self.object_class_accuracy = []
         self.object_location_error = []
         self.object_location_accuracy = []
+        self.object_pose_accuracy = []
+        self.object_pose_error = []
         self.objectsel_location_accuracy = []
         self.object_count_error = []
         self.num_corner_error = []
@@ -687,7 +839,7 @@ class HouseSemanticSimilarity:
                     if f'obj_{i}' not in gt_house:
                         break
                     gt_object, location, rotation = gt_house[f'obj_{i}']
-                    gt_objs[gt_object].append(location)
+                    gt_objs[gt_object].append((location, rotation))
                     i += 1
                 
                 pred_objs = defaultdict(list)
@@ -701,7 +853,7 @@ class HouseSemanticSimilarity:
                         print("error object")
                         i+=1
                         continue
-                    pred_objs[pred_object].append(location)
+                    pred_objs[pred_object].append((location, rotation))
                     i += 1
 
                 pred_obj_classes = defaultdict(list)
@@ -739,9 +891,12 @@ class HouseSemanticSimilarity:
                          self.object_location_accuracy.append(0)
                          self.object_location_error.append(1)
                          continue
-                    mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                    # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                    mean_dist, accuracy, pose_accuracy, mean_pose_dist = compute_locationpose_error(pred_loc, gt_loc, max_dimension)
                     self.object_location_accuracy.append(accuracy)
                     self.object_location_error.append(mean_dist/max_dimension)
+                    self.object_pose_accuracy.append(pose_accuracy)
+                    self.object_pose_error.append(mean_pose_dist)
 
                     # if len(selected_objs)>0:
                     #     if obj in selected_obj_classes:
@@ -776,6 +931,8 @@ class HouseSemanticSimilarity:
         object_finegrain_acc = np.mean(self.object_finegrain_accuracy)
         object_location_err = np.mean(self.object_location_error)
         object_location_acc = np.mean(self.object_location_accuracy)
+        object_pose_acc = np.mean(self.object_pose_accuracy)
+        object_pose_err = np.mean(self.object_pose_error)
         #if len(self.objectsel_location_accuracy)>0:
         #    objectsel_location_acc = np.mean(self.objectsel_location_accuracy)
         #else:
@@ -791,7 +948,196 @@ class HouseSemanticSimilarity:
         self.logger.log({"ObjectFinegrainAcc": object_finegrain_acc})
         self.logger.log({"ObjectLocationError": object_location_err})
         self.logger.log({"ObjectLocationAcc": object_location_acc})
+        self.logger.log({"ObjectPoseAcc": object_pose_acc})
+        self.logger.log({"ObjectPoseError": object_pose_err})
         # self.logger.log({"ObjectSelLocationAcc": objectsel_location_acc})
+
+
+class AttributeObjectMetrics:
+    def __init__(self, args):
+        self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
+        self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2')
+
+        asset_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
+        self.assetid2desc = {}
+        for image_file, asset_name, object_class, caption in asset_desc:
+            self.assetid2desc[asset_name] = caption
+        
+        self.house_jsons = []
+        self.gt_house_jsons = []
+        self.selected_objs = []
+
+        self.object_class_accuracy = []
+        self.object_location_error = []
+        self.object_location_accuracy = []
+        self.object_pose_accuracy = []
+        self.object_pose_error = []
+        self.object_finegrain_accuracy = []
+        self.ignore_loc = []
+        self.object_attr_similarity = []
+
+        self.logger = args['logger']
+
+    def update(self, output, gt):
+        # compute text sim
+        # convert output program text to gen config
+        # pdb.set_trace()
+        if "#room" in output:
+            room_response = output.split(": #room \n")[-1]
+        else:
+            room_response = output.split(": \n")[-1]
+        # pdb.set_trace()
+        room_json_text = "\n".join(room_response.split("\n")[:-1])
+        room_json_text = room_json_text.split("###")[0]
+        room_json_text = room_json_text.replace("(", "[")
+        room_json_text = room_json_text.replace(")", "]")
+        
+        try:
+            pred_house_dict = yaml.load(room_json_text, Loader=yaml.FullLoader)
+        except:
+            pred_house_dict = {}
+        
+        if pred_house_dict is None:
+            print("none house dict")
+            print(room_json_text)
+        self.house_jsons.append(pred_house_dict)
+        
+        # convert gt program text to gen config
+        og_gt_house_text = gt['text_labels'][0]
+        if "#room" in og_gt_house_text:
+            gt_house_text = og_gt_house_text.split(": #room \n")[-1]
+        else:
+            gt_house_text = og_gt_house_text.split(": \n")[-1]
+        gt_house_text = gt_house_text.replace("(", "[")
+        gt_house_text = gt_house_text.replace(")", "]")
+        # pdb.set_trace()
+
+        try:
+            gt_house_dict = yaml.load(gt_house_text, Loader=yaml.FullLoader)
+        except:
+            gt_house_dict = {}
+
+        if gt_house_dict is None:
+            print("none house dict GT!")
+            print(gt_house_text)
+        self.gt_house_jsons.append(gt_house_dict)
+
+        if "The red circular 1 mark in the image is at 3D coordinate (x, y, z)" in og_gt_house_text:
+            ignore_loc = og_gt_house_text.split("The red circular 1 mark in the image is at 3D coordinate (x, y, z)")[-1].split(".")[0]
+            ignore_loc = ignore_loc.strip()
+            ignore_loc = ast.literal_eval(ignore_loc)
+            self.ignore_loc.append(ignore_loc)
+
+    def compute(self):
+        for ignore_ind, (pred_house, gt_house) in enumerate(zip(self.house_jsons, self.gt_house_jsons)):
+            # pdb.set_trace()
+            
+            if pred_house is None or gt_house is None:
+                continue
+            if len(pred_house) == 0 or len(gt_house) == 0:
+                continue
+            # check accuracy of room polygon i.e number of sides match
+            pred_polygon = pred_house['polygon']
+            gt_polygon = gt_house['polygon']
+
+            max_coordinate = np.max(gt_polygon)
+            min_coordinate = np.min(gt_polygon)
+            max_dimension = max_coordinate - min_coordinate
+
+            # convert to shapely polygon and simplify
+            pred_polygon_simple = Polygon(pred_polygon).simplify(0.01)
+            gt_polygon_simple = Polygon(gt_polygon).simplify(0.01)
+
+            # check accuracy of object classes
+            # make counts of objects and locations
+            gt_objs = defaultdict(list)
+            i=0
+            while(True):
+                if f'obj_{i}' not in gt_house:
+                    break
+                gt_object, location, rotation = gt_house[f'obj_{i}']
+                gt_objs[gt_object].append((location, rotation, self.assetid2desc[gt_object]))
+                i += 1
+            
+            pred_objs = defaultdict(list)
+            i=0
+            while(True):
+                if f'obj_{i}' not in pred_house:
+                    break
+                try:
+                    pred_object, location, rotation = pred_house[f'obj_{i}']
+                except:
+                    print("error object")
+                    i+=1
+                    continue
+                pred_objs[pred_object].append((location, rotation, self.assetid2desc[pred_object]))
+                i += 1
+
+            pred_obj_classes = defaultdict(list)
+            for obj in pred_objs:
+                obj_class = get_object_class_from_asset(obj)
+                pred_obj_classes[obj_class].extend(pred_objs[obj])
+            
+            pred_locations = {}
+            gt_locations = defaultdict(list)
+            for obj in gt_objs:
+                obj_class = get_object_class_from_asset(obj)
+                if obj_class in pred_obj_classes:
+                    self.object_class_accuracy.append(1)
+                    pred_locations[obj_class] = pred_obj_classes[obj_class]
+                    gt_locations[obj_class].extend(gt_objs[obj])
+                else:
+                    self.object_class_accuracy.append(0)
+
+            # compute hungarian matching of predicted object locations to gt object locations
+            # if len(selected_objs)>0:
+            #    selected_obj_classes = [obj.split(" ")[0] for obj in selected_objs]
+            if len(self.ignore_loc)>0:
+                ignore_locs = self.ignore_loc[ignore_ind]
+            else:
+                ignore_locs = -1
+            for obj in gt_locations:
+                pred_loc = pred_locations[obj]
+                gt_loc = gt_locations[obj]
+                
+                # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
+                self.object_location_accuracy.append(accuracy)
+                self.object_location_error.append(mean_dist/max_dimension)
+                self.object_pose_accuracy.append(pose_accuracy)
+                self.object_pose_error.append(mean_pose_dist)
+                self.object_attr_similarity.append(attr_sim)
+
+                # if len(selected_objs)>0:
+                #     if obj in selected_obj_classes:
+                #         self.objectsel_location_accuracy.append(accuracy)
+                
+            #except:
+            #    print("some error in JSON")
+            #    continue
+
+        if len(self.polygon_accuracy) == 0:
+            return
+        # compute mean of all accuracies
+        object_class_acc = np.mean(self.object_class_accuracy)
+        object_location_err = np.mean(self.object_location_error)
+        object_location_acc = np.mean(self.object_location_accuracy)
+        object_pose_acc = np.mean(self.object_pose_accuracy)
+        object_pose_err = np.mean(self.object_pose_error)
+        object_attr_sim = np.mean(self.object_attr_similarity)
+        #if len(self.objectsel_location_accuracy)>0:
+        #    objectsel_location_acc = np.mean(self.objectsel_location_accuracy)
+        #else:
+        #    objectsel_location_acc = -1
+
+        # log
+        self.logger.log({"ObjectClassAcc": object_class_acc})
+        self.logger.log({"ObjectLocationError": object_location_err})
+        self.logger.log({"ObjectLocationAcc": object_location_acc})
+        self.logger.log({"ObjectPoseAcc": object_pose_acc})
+        self.logger.log({"ObjectPoseError": object_pose_err})
+        self.logger.log({"ObjectAttrSim": object_attr_sim})
+
 
 
 class HouseJsonSimilarity:

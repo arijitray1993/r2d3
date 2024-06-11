@@ -5,7 +5,7 @@
 #$ -l h_rt=24:00:00
 #$ -l gpus=2
 #$ -l gpu_memory=48G
-#$ -l gpu_type=L40S|L40|A6000|RTX8000
+#$ -l gpu_type=L40S|L40|A6000
 #$ -N llava_incomplete_greydepthover_campolygon_orientlanguage
 #$ -j y
 #$ -m ea

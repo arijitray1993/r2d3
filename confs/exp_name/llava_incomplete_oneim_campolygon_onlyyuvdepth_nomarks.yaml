@@ -16,7 +16,7 @@ load_checkpoint: False
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygon_onlyyuvdepth_nomarks/decent-resonance-3_115000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygonlanguage/zany-aardvark-10_40000
 
 eval_every: 5000
-num_eval_steps: 70
+num_eval_steps: 500
 no_shuffle: False
 
 freeze_vision: False

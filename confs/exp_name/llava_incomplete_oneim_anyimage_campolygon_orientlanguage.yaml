@@ -1,4 +1,4 @@
-exp_name: llava_incomplete_oneim_campolygon_orientlanguage
+exp_name: llava_incomplete_oneim_anyimage_campolygon_orientlanguage
 device: 'gpu'
 num_devices: 1
 num_workers: 1
@@ -16,35 +16,16 @@ load_checkpoint: False
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygon_orientlanguage/still-armadillo-37_120000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygon_orientlanguage/fresh-thunder-31_60000
 
 eval_every: 5000
-num_eval_steps: 500
+num_eval_steps: 8
 no_shuffle: False
 
 freeze_vision: False
 
-train_dataset_choice: "ProcTHOR_image_camposition_marked"
-train_dataset_args: {
-  split: "train",
-  mode: "train",
-  include_children: False,
-}
-train_collate_fn: "collate_fn"
-
-
-## define your valtrain dataset, the name must match the class name in datasets/dataloaders.py. This is run during training to help choose best checkpoint
-valtrain_dataset_choice:  "ProcTHOR_image_camposition_marked"
-valtrain_dataset_args: {
-  split: "valtrain",
-  mode: "val",
-  include_children: False,
-}
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "ProcTHOR_image_camposition_marked"
+val_dataset_choice: "AnyImageCaption"
 val_dataset_args: {
-  split: "val",
-  mode: "val",
-  include_children: False,
-  use_no_mark_baseline: True
+  image_data_path: "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/simple_real_ims"
 }
 val_collate_fn: "collate_fn" 
 
@@ -65,6 +46,4 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
   ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
-  ['HouseSemanticSimilarity', 'HouseSemanticSimilarity', [], []],
-  ['HouseObjectDistancesAccuracy', 'HouseObjectDistancesAccuracy', [], []]
 ]

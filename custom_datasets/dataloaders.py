@@ -3,6 +3,7 @@ import os
 import pdb  # noqa
 import random
 from collections import defaultdict
+import itertools
 from itertools import combinations
 import pickle as pkl
  
@@ -366,56 +367,64 @@ class ADE20K(Dataset):
 
 
 class AnyImageCaption(Dataset):
-    def __init__(self, args):
-        self.tokenizer, _, self.image_processor, self.context_len = load_pretrained_model(
-                model_path=args['model_path'],
-                model_base=None,
-                model_name=get_model_name_from_path(args['model_path'])
-        )
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+       
         self.batch_decode = self.tokenizer.batch_decode
 
         self.image_data_path = args['image_data_path']
-        if args['caption_data_path'] is not None:
-            self.caption_data_path = args['caption_data_path']
-
+        
         self.data = []
         for image_path in os.listdir(self.image_data_path):
-            if args['caption_data_path'] is not None:
-                caption_path = os.path.join(self.caption_data_path, image_path.split(".")[0] + ".txt")
-                if not os.path.exists(caption_path):
-                    continue
-                with open(caption_path, "r") as f:
-                    caption = f.read()
-                
-                self.data.append((image_path, caption))
-            else:
-                self.data.append(image_path)
+            if ".jpeg" in image_path or ".jpg" in image_path or ".png" in image_path:
+                self.data.append(os.path.join(self.image_data_path, image_path))
+            # self.data.append(os.path.join(self.image_data_path, image_path))
 
+        self.polygons = {
+            'bedroom_1': [(0, 0), (0,600), (600, 600), (600, 0)],
+            'bedroom_2': [(0, 0), (0,600), (400, 600), (400, 0)],
+            'bedroom_3': [(0, 0), (0,400), (600, 400), (600, 0)],
+            'living_room_1': [(0, 0), (0,400), (600, 400), (600, 0)],
+            'living_room_2': [(0, 0), (0,400), (600, 400), (600, 0)],
+            'living_room_3': [(0, 0), (0,400), (600, 400), (600, 0)],
+            'toilet_1': [(0, 0), (0,400), (600, 400), (400, 0)],
+            'toilet_2': [(0, 0), (0,400), (600, 400), (600, 0)],
+            'dalle_livingroom': [(0, 0), (0,400), (600, 400), (600, 0)],
+        }
+
+        self.cams = {
+            'bedroom_1': (300, 300),
+            'bedroom_2': (30, 30),
+            'bedroom_3': (300, 300),
+            'living_room_1': (300, 300),
+            'living_room_2': (300, 300),
+            'living_room_3': (300, 300),
+            'toilet_1': (300, 300),
+            'toilet_2': (20, 20),
+            'dalle_livingroom': (300, 300),
+        }
         self.args = args
 
     def __getitem__(self, idx):
-        if self.args['caption_data_path'] is not None:
-            image_path, caption = self.data[idx]
-        else:
-            image_path = self.data[idx]
-            caption = ""
-
-        image_path = os.path.join(self.image_data_path, image_path)
+       
+        image_path = self.data[idx]
+        
         image = Image.open(image_path).convert("RGB")
 
-        num_corner = 4
-        if caption == "":
-            prefix_text = f"## <image> \n Write code for an interactive room with {num_corner} corners that looks like the image. \n Answer: "
-        else:
-            prefix_text = f"## <image> \n Write code for an interactive room with {num_corner} corners that looks like the image with the description: {caption}. \n Answer: "
-       
-        return image, caption, prefix_text
+        room_type = image_path.split("/")[-1].split(".")[0]
+        format_polygon_coords = str(self.polygons[room_type])
+        camera_prompt = f"Image taken from (x,z) {self.cams[room_type]}."
+        prefix = f"## <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n"
+        
+        return [image_path, ], image, prefix
     
     def __len__(self):
         return len(self.data)
     
     def collate_fn(self, batch):
-        images, captions, prompts = zip(*batch)
+        im_files, images, prompts = zip(*batch)
 
         input_ids = []
         attention_mask = []
@@ -442,7 +451,8 @@ class AnyImageCaption(Dataset):
             "labels": input_ids,
             "pixel_values": pixel_values,
             "program_texts": prompts,
-            "text_labels": captions,
+            "text_labels": prompts,
+            "image_lists": im_files,
         }
 
         return return_dict
@@ -993,40 +1003,139 @@ class ProcTHOR_image_only(Dataset):
 
         return return_dict
 
-class Mix_Procthor_ImageCamPos_VLMBench(Dataset):
+
+class MixLLavaProcthor(Dataset):
     def __init__(self, args, tokenizer, image_processor):
-        pass
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+
+        procthor_data = ProcTHOR_image_camposition_marked(args, tokenizer, image_processor)
+        llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
+
+        self.data = itertools.chain(
+            procthor_data,
+            llava_data
+        )
+
+        weights = [2]*len(procthor_data) + [1]*len(llava_data)
+
+        self.sampler = WeightedRandomSampler(weights, len(self.data))
 
     def __getitem__(self, idx):
-        pass
-
+        return self.data[idx]
+    
     def __len__(self):
-        pass
-
+        return len(self.data)
+    
     def collate_fn(self, batch):
-        pass
+        image_paths, imgs, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
+
+        new_images = []
+        for image_b in imgs:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "program_texts": program_texts,
+            "house_json": house_jsons,
+            "image_lists": image_paths,
+            'objs_present': objs_present,
+        }
+
+        return return_dict
+        
 
 
-class ProcTHOR_image_camposition_marked(Dataset):
+class LLaVAInstructTune(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        json_data = json.load("/projectnb/ivc-ml/array/data/llava_data/llava_v1_5_mix665k.json")
+        
+        self.image_path = "/projectnb/ivc-ml/array/data/llava_data/image_data"
+        
+        self.data = []
+
+        for entry in json_data:
+            im_path = entry['image']
+            if not os.path.exists(im_path):
+                continue
+            
+            if len(entry['conversations'])%2!=0:
+                continue
+
+            for question, answer in zip(entry['conversations'][::2], entry['conversations'][1::2]):
+                self.data.append((im_path, question['value'], answer['value']))
+        
+        print("Total number of data points: ", len(self.data))
+
+    def __getitem__(self, idx):
+        im_file, question, answer = self.data[idx]
+        
+        img = [Image.open(im_file).convert("RGB"),]
+
+        if "<image>\n" not in question:
+            question = "<image>\n" + question
+        
+        prompt = f"## {question} \n Answer: {answer} \n###"
+
+        caption = prompt
+        text_labels = prompt
+        program_text = ""
+        house_json = {}
+        objs_present = []
+
+        return [im_file,], img, caption, prompt, text_labels, program_text, house_json, objs_present
+    
+    def __len__(self):
+        return len(self.data)
+
+class ProcTHOR_depth_reasoning(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
         self.tokenizer = tokenizer
         self.image_processor = image_processor 
         self.batch_decode = self.tokenizer.batch_decode
-
         json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
-
-        #if self.args.get("use_topdown"):
-        # topdown_caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions_topdown.json"))
+        
+        topdown_caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions_topdown.json"))
         # else:
         caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
+
+        apid_to_topdown_caption = {}
+        for apid, image_file, caption in topdown_caption_data:
+            apid_to_topdown_caption[apid] = caption
 
         self.apartment_ind_to_caption = {}
         for apartment_ind, image_file, caption in caption_data:
             #pdb.set_trace()
             # if apartment_ind in caption_data:
-            self.apartment_ind_to_caption[apartment_ind] = (image_file, caption)
-
+            self.apartment_ind_to_caption[apartment_ind] = (image_file, apid_to_topdown_caption.get(apartment_ind, ""))
+        # pdb.set_trace()
         self.data = []
         for entry in json_data:
             if len(entry[4]) < 1:
@@ -1049,7 +1158,73 @@ class ProcTHOR_image_camposition_marked(Dataset):
             self.data = self.data[11000:11100]
             self.split = "val"
         elif args["split"] == "val":
-            self.data = self.data[-100:]
+            self.data = self.data[-550:]
+            self.split = "test"
+    
+        print("Total number of data points in split: ", len(self.data))
+
+        print("Now filter based on depth reasoning data available")
+        
+        
+        pass
+    
+    def __getitem__(self, idx):
+        pass
+    
+    def __len__(self):
+        pass
+
+    def collate_fn(self, batch):
+        pass
+
+
+class ProcTHOR_image_camposition_marked(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor 
+        self.batch_decode = self.tokenizer.batch_decode
+
+        json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
+
+        #if self.args.get("use_topdown"):
+        topdown_caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions_topdown.json"))
+        # else:
+        caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
+
+        apid_to_topdown_caption = {}
+        for apid, image_file, caption in topdown_caption_data:
+            apid_to_topdown_caption[apid] = caption
+
+        self.apartment_ind_to_caption = {}
+        for apartment_ind, image_file, caption in caption_data:
+            #pdb.set_trace()
+            # if apartment_ind in caption_data:
+            self.apartment_ind_to_caption[apartment_ind] = (image_file, apid_to_topdown_caption.get(apartment_ind, ""))
+        # pdb.set_trace()
+        self.data = []
+        for entry in json_data:
+            if len(entry[4]) < 1:
+                continue
+            if not os.path.exists(entry[4][0]):
+                continue
+
+            apartment_ind = entry[4][0].split("/")[-2]
+            if apartment_ind not in self.apartment_ind_to_caption:
+                continue
+
+            self.data.append(entry)
+        
+        print("Total number of data points: ", len(self.data))
+
+        if args["split"] == "train":
+            self.data = self.data[:11000]
+            self.split = "train"
+        elif args["split"] == "valtrain":
+            self.data = self.data[11000:11100]
+            self.split = "val"
+        elif args["split"] == "val":
+            self.data = self.data[-550:]
             self.split = "test"
     
         print("Total number of data points in split: ", len(self.data))
@@ -1115,7 +1290,7 @@ class ProcTHOR_image_camposition_marked(Dataset):
                 obj_pos = obj[1]
                 dist_to_camera = np.sqrt((obj_pos[0] - cam_pos[0])**2 + (obj_pos[2] - cam_pos[1])**2)
 
-                if self.args.get("randomize_point"):
+                if self.args.get("randomize_point") or self.args.get("use_multimarks"):
                     objs_to_choose.append((f'obj_{i}', obj_pos))
                 else:
                     if dist_to_camera > max_dist_to_camera:
@@ -1130,6 +1305,10 @@ class ProcTHOR_image_camposition_marked(Dataset):
             if len(objs_to_choose) > 0:
                 max_dist_obj_name, max_dist_obj_pos = random.choice(objs_to_choose)
         
+        if self.args.get("use_multimarks"):
+            if len(objs_to_choose) > 0:
+                marked_points = random.sample(objs_to_choose, min(5, len(objs_to_choose)))
+                max_dist_obj_name = marked_points[0][0]
         
         objid_to_color = {}
         for color in color_to_objid:
@@ -1139,12 +1318,23 @@ class ProcTHOR_image_camposition_marked(Dataset):
 
         # mark furthest object in the image
         if max_dist_obj_name is not None:
-            farthest_obj_color = list(ast.literal_eval(objid_to_color[max_dist_obj_name]))
 
-            color_mask = np.all(seg_frame == farthest_obj_color, axis=-1)
-            y, x = np.where(color_mask)
-            x = x.mean()
-            y = y.mean()
+            if self.args.get("use_multimarks"):
+                all_points = []
+                for obj_name, obj_pos in marked_points:
+                    color = list(ast.literal_eval(objid_to_color[obj_name]))
+                    color_mask = np.all(seg_frame == color, axis=-1)
+                    y, x = np.where(color_mask)
+                    x = x.mean()
+                    y = y.mean()
+                    all_points.append((x,y))
+            else:
+                farthest_obj_color = list(ast.literal_eval(objid_to_color[max_dist_obj_name]))
+
+                color_mask = np.all(seg_frame == farthest_obj_color, axis=-1)
+                y, x = np.where(color_mask)
+                x = x.mean()
+                y = y.mean()
 
             # mark the position in the image
             if self.args.get("use_depth"):
@@ -1305,7 +1495,13 @@ class ProcTHOR_image_camposition_marked(Dataset):
                 img = [img, d_img]
 
                 new_im_file = "/".join(image_path.split("/")[:-1])+f"/{corner_ind}_marked_2.png"
-           
+            elif self.args.get("use_multimarks"):
+                img = Image.open(image_path).convert("RGB")
+                for mi, (x,y) in enumerate(all_points):
+                    img = add_red_dot_with_text(img, (x,y), str(mi))
+                img = [img,]
+                new_im_file = "/".join(image_path.split("/")[:-1])+f"/{corner_ind}_marked_multi.png"
+                
             else:
                 img = Image.open(image_path).convert("RGB")
                 
@@ -1324,10 +1520,20 @@ class ProcTHOR_image_camposition_marked(Dataset):
 
             if self.args.get("captiononly_baseline"):
                 camera_prompt = ""
+            elif self.args.get("use_multimarks"):
+                camera_prompt = f"Image taken from (x,z) {cam_pos}."
+                if self.args.get("use_angle"):
+                    camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}."
+                for mi, (_, obj_pos) in enumerate(marked_points):
+                    camera_prompt += f" The red {mi} mark in the image is at 3D coordinate (x, y, z) {obj_pos}."
             else:
                 camera_prompt = f"Image taken from (x,z) {cam_pos} looking inside the polygon. The red circular 1 mark in the image is at 3D coordinate (x, y, z) {max_dist_obj_pos}. "
+                if self.args.get("use_angle"):
+                    camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle} looking inside the polygon. The red circular 1 mark in the image is at 3D coordinate (x, y, z) {max_dist_obj_pos}. "
                 if self.args.get("use_no_mark_baseline") or self.args.get("use_depth_yuv_no_point"):
                     camera_prompt = f"Image taken from (x,z) {cam_pos}."
+                    if self.args.get("use_angle"):
+                        camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}."
             
         else:
             if self.args.get("captiononly_baseline"):
@@ -1338,14 +1544,22 @@ class ProcTHOR_image_camposition_marked(Dataset):
                 new_im_file = image_path
                 img = [Image.open(image_path).convert("RGB"),]
                 camera_prompt = f"Image taken from (x,z) {cam_pos}. No object in the image is present in the yaml file."
+                if self.args.get("use_angle"):
+                    camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}. No object in the image is present in the yaml file."
                 if self.args.get("use_no_mark_baseline") or self.args.get("use_depth_yuv_no_point"):
                     camera_prompt = f"Image taken from (x,z) {cam_pos}."
+                    if self.args.get("use_angle"):
+                        camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}."
 
 
         if self.args.get("use_caption"):
             prefix_options = [
                 f"## <image> Describe the image: {caption} If the room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
             ]
+            if self.args['mode'] == "val":
+                prefix_options = [
+                    f"## <image> If the room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
+                ]
         elif self.args.get("captiononly_baseline"):
             prefix_options = [
                 f"## The room polygon is (x,z) {format_polygon_coords}. {caption} Plausible 3D coordinates (x, y,z) for the room: \n",
