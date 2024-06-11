@@ -40,6 +40,10 @@ Thumbs.db
 
 *.json
 *.png
+*.jpeg
+*.jpg
+*.tiff
+*.gif
 
 checkpoints/
 outputs/

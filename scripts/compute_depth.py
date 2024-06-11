@@ -42,7 +42,7 @@ if __name__=="__main__":
             align_corners=False,
         )
 
-        pdb.set_trace()
+        # pdb.set_trace()
         # save the depth as pt
-        # torch.save(prediction.detach().cpu(), depth_im_path)
+        torch.save(prediction.detach().cpu(), depth_im_path)
 
