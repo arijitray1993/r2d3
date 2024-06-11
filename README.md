@@ -2,6 +2,9 @@
 
 [arxiv] coming soon. in submission.
 
+![The task of the model is to precisely describe a 3D scene using the object names, attributes, and 3D locations that can be rendered in a graphics engine to reflect the image. We use this task to evaluate a multimodal language model's ability to understand the 3D nature of the scene holistically.](teaser_fig.png)
+The task is to precisely describe a 3D scene using the object names, attributes, and 3D locations that can be rendered in a graphics engine to reflect the image. We use this task to evaluate a multimodal language model's ability to understand the 3D nature of the scene holistically.
+
 ## Pre-requisities
 
 Create a conda environment:
@@ -35,6 +38,7 @@ python -m accelerate.commands.launch --num_processes=1 main.py exp_name=<exp_nam
 Here are the `exp_name` choices for the various adaptation methods:
 
 - `llava_incomplete_oneim_campolygon_nomarksbaseline`: This one runs the standard fine-tuning of LLaVA without precise camera orientation during training. This is denoted as `FT` in the tables in the paper. 
+- `llavadino_oneim_campolygon_nomarksbaseline`: This one runs the standard fine-tuning of LLaVA with a Dino encoder instead of ViT. Also without precise camera orientation during training. Denoted as `DinoV2 FT` in the tables.
 - `llava_incomplete_oneim_campolygon_onlyyuvdepth_nomarks`: This runs the fine-tuning with estimated overlayed depth on the images (also assuming no precise camera orientation during training). Denoted as `depth` in the tables. 
 - `llava_incomplete_oneim_campolygonangle_nomarksbaseline`: This runs the fine-tuning of LLaVA with precise camera orientation specidfied using language. Denoted as `Orient Language` in the tables. 
 - `llava_incomplete_oneim_campolygon_randompointorient` : This runs the fine-tuning with the precise camera orientation marked as a combination of langauge and a point marked in the image with the 3D position. Denoted as `Visual Point` in the tables. 
