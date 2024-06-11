@@ -105,6 +105,8 @@ def compute_locationposeattr_error(pred_locations, gt_locations, max_dimension, 
         # compute attribute similarity
         batch_dict = attrtokenizer([gt_attr, pred_attr], max_length=512, padding=True, truncation=True, return_tensors='pt')
 
+        batch_dict = {k: v.cuda() for k, v in batch_dict.items()}
+
         outputs = attrmodel(**batch_dict)
         embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
 
@@ -956,7 +958,7 @@ class HouseSemanticSimilarity:
 class AttributeObjectMetrics:
     def __init__(self, args):
         self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
-        self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2')
+        self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
 
         asset_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
         self.assetid2desc = {}
@@ -1070,7 +1072,7 @@ class AttributeObjectMetrics:
                     print("error object")
                     i+=1
                     continue
-                pred_objs[pred_object].append((location, rotation, self.assetid2desc[pred_object]))
+                pred_objs[pred_object].append((location, rotation, self.assetid2desc.get(pred_object, get_object_class_from_asset(pred_object))))
                 i += 1
 
             pred_obj_classes = defaultdict(list)
@@ -1116,7 +1118,7 @@ class AttributeObjectMetrics:
             #    print("some error in JSON")
             #    continue
 
-        if len(self.polygon_accuracy) == 0:
+        if len(self.object_location_accuracy) == 0:
             return
         # compute mean of all accuracies
         object_class_acc = np.mean(self.object_class_accuracy)

@@ -12,7 +12,7 @@ import re
 import tqdm
 
 # OpenAI API Key
-api_key = "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"
+api_key = ""
 
 # Function to encode the image
 def encode_image(image_path):

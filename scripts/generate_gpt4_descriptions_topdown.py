@@ -17,7 +17,7 @@ from utils.ai2thor_utils import generate_program_from_roomjson
 from PIL import Image, ImageDraw, ImageFont
 
 # OpenAI API Key
-api_key = "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"
+api_key = ""
 
 
 def add_red_dot_with_text(image, position, text):

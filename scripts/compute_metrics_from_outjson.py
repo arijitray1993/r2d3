@@ -249,7 +249,7 @@ def compute_image_caption_metrics(json_file, logger, eval_caption_sim=False):
 
 if __name__=="__main__":
     
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygonangle_nomarksbaseline/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_campolygon_nomarksbaseline/output.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()
