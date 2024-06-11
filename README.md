@@ -15,11 +15,11 @@ conda activate r2d3_conda
 ```
 
 Get all the data and place it in `custom_datasets/procThor/` (create the folder if not existing):
-- `final_data_neurips.json`: 
-- `GPT4V_room_descriptions_topdown.json`: 
-- `GPT4V_room_descriptions.json`:  
+- `final_data_neurips.json`: https://huggingface.co/datasets/array/r2d3/blob/main/final_data_neurips.json 
+- `GPT4V_room_descriptions_topdown.json`: https://huggingface.co/datasets/array/r2d3/blob/main/GPT4V_room_descriptions_topdown.json 
+- `GPT4V_room_descriptions.json`:  https://huggingface.co/datasets/array/r2d3/blob/main/GPT4V_room_descriptions.json 
 
-Get all the images and make sure they are in `custom_datasets/procThor/images/train/`. This folder should have folders corresponding to each room and the images from various corners inside the room folder. In the dataloader, we only select the image with most objects visbile for tasking the model to reconstruct it in 3D.
+Get all the images from here (coming soon) and make sure they are in `custom_datasets/procThor/images/train/`. This folder should have folders corresponding to each room and the images from various corners inside the room folder. In the dataloader, we only select the image with most objects visbile for tasking the model to reconstruct it in 3D.
 
 To be able to run the training/evaluations with infered depth, run:
 
@@ -27,6 +27,38 @@ To be able to run the training/evaluations with infered depth, run:
 cd scripts
 python compute_depth.py
 ```
+
+## Data Format
+
+`final_data_neurips.json` contains the data needed to run your MLLM on the benchmark. 
+
+This JSON contains a list of room entries. Each room entry contains the following information:
+`[program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name]`
+
+Here is the description for each of the fields:
+- **`program_text`**: This is the graphics program for the room. You can also generate a lighter version of the graphics program without children objects if you do
+
+- **`house_json`**: This is the full raw JSON needed for the AI2THOR simulator to generate the room. The `program_text` above is a lighter versio of it to fit into context length for MLLMs. You can generate an even loighter version (without children objects) if you do:
+```
+from utils.ai2thor_utils import generate_program_from_roomjson
+program_text = generate_program_from_roomjson(house_json, include_children=False)
+```
+
+- **`og_house_json`**: This is the raw AI2THOR JSON for the entire apartment from which the room came from. 
+
+- **`cam_ind_to_position`**: The camera positions for each of the images taken for the room.  
+
+- **`all_imgs`**: The paths to the image files for each of the camera positions in `cam_ind_to_position`. 
+
+- **`all_objs`**: The objects present in each of the images. It's a list of list of objects for each image. In the paper, we choose the image with the most number of objects for the tasking the MLLM to reconstruct the 3D. 
+
+- **`all_seg_frames`**: The segmentation map for each of the images in `all_imgs`. 
+
+- **`color_to_objid`**: The mapping of the seg frame color to the object id. This is the object id present in the program_text.   
+
+- **`obj_id_to_name`**: The object class name for the object ids. 
+
+
 
 ## Evaluations
 To run the various adaptation approaches in the paper, use the following command and use the appropriate exp_name. 
