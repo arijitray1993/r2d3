@@ -1,6 +1,6 @@
 # R2D3: Imparting Spatial Reasoning by Reconstructing 3D Scenes from 2D Images
 
-[arxiv] coming soon. 
+[arxiv] coming soon. in submission.
 
 ## Pre-requisities
 

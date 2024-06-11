@@ -45,6 +45,7 @@ Thumbs.db
 *.tiff
 *.gif
 
+models/LLaVA_old
 checkpoints/
 outputs/
 wandb/

@@ -25,7 +25,7 @@ from transformers import LlamaForCausalLM, CodeLlamaTokenizer
 from transformers import CLIPVisionModel, CLIPImageProcessor
 
 # sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
-sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
+sys.path.append("models/LLaVA_modified/LLaVA")
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
 from llava.eval.run_llava import eval_model
