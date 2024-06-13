@@ -109,4 +109,14 @@ Also, take a look at `custom_datasets/dataloaders.py` at class `ProcTHOR_image_c
 Take a look at `models/eval_funcs.py` to see how the metrics are computed. 
 
 
+## BibTeX
 
+If you use this code, please cite:
+
+```
+@misc{ray2024r2d3,
+      title={R2D3: Imparting Spatial Reasoning by Reconstructing 3D Scenes from 2D Images}, 
+      author={Arijit Ray and Dina Bashkirova and Reuben Tan and Kuo-Hao Zeng and Bryan A. Plummer and Ranjay Krishna and Kate Saenko},
+      year={2024},
+}
+```
