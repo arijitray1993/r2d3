@@ -14,12 +14,19 @@ conda env create -f r2d3_conda.yml
 conda activate r2d3_conda
 ```
 
-Get all the data and place it in `custom_datasets/procThor/` (create the folder if not existing):
-- `final_data_neurips.json`: https://huggingface.co/datasets/array/r2d3/blob/main/final_data_neurips.json 
-- `GPT4V_room_descriptions_topdown.json`: https://huggingface.co/datasets/array/r2d3/blob/main/GPT4V_room_descriptions_topdown.json 
-- `GPT4V_room_descriptions.json`:  https://huggingface.co/datasets/array/r2d3/blob/main/GPT4V_room_descriptions.json 
+Get all the following data and place it in `custom_datasets/procThor/` (create the folder if not existing):
+- `final_data_neurips.json`: https://huggingface.co/datasets/array/r2d3_data/blob/main/final_data_neurips.json 
+- `GPT4V_room_descriptions_topdown.json`: https://huggingface.co/datasets/array/r2d3_data/blob/main/GPT4V_room_descriptions_topdown.json 
+- `GPT4V_room_descriptions.json`:  https://huggingface.co/datasets/array/r2d3_data/blob/main/GPT4V_room_descriptions.json 
+- `asset_descriptions`: https://huggingface.co/datasets/array/r2d3_data/blob/main/asset_descriptions_all.json 
 
-Get all the images from here (coming soon) and make sure they are in `custom_datasets/procThor/images/train/`. This folder should have folders corresponding to each room and the images from various corners inside the room folder. In the dataloader, we only select the image with most objects visbile for tasking the model to reconstruct it in 3D.
+Get all the image tar.gz from here (https://huggingface.co/datasets/array/r2d3_data). Then concatenate all the parts with the following command (this will require around 80GB of disk space):
+```
+cat images.tar.gz.parta* > images.tar.gz
+tar -xvf images.tar.gz
+```
+
+Make sure the `images` folder is in `custom_datasets/procThor/`. This folder should have folders corresponding to each room and the images from various corners inside the room folder. In the dataloader, we only select the image with most objects visbile for tasking the model to reconstruct it in 3D.
 
 To be able to run the training/evaluations with infered depth, run:
 
