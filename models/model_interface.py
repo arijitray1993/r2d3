@@ -598,6 +598,56 @@ class LlavaModel_16V_Interface(nn.Module):
         return outputs
 
 
+class GPT4_Interface(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.model = ""
+
+    
+    def get_caption(image_path, prompt, api_key=""):
+        # Getting the base64 string
+        base64_image = encode_image(image_path)
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+
+        payload = {
+            "model": "gpt-4-vision-preview",
+            "messages": [
+            {
+                "role": "user",
+                "content": [
+                {
+                    "type": "text",
+                    "text": prompt
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64_image}"
+                    }
+                }
+                ]
+            }
+            ],
+            "max_tokens": 300
+        }
+
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+
+        return response
+
+    def forward(self, image_path, prompt):
+        outputs = self.get_caption(image_path, prompt)
+        return outputs
+
+    def generate(self, input_ids):
+        outputs = self.get_caption(image_path, prompt)
+        return outputs
+
+
 class Llava3DModelInterface(nn.Module):
 
     def __init__(self, args):

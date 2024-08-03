@@ -281,6 +281,7 @@ def generate_output_houses(json_path, generate_explanation=False):
         plt.savefig(f"{format_results_folder}/example_{room_ind}.png")
         plt.close()
 
+        pdb.set_trace()
         if generate_explanation:
             gt_program_text = ai2thor_utils.generate_program_from_roomjson(gt_house_json)
             failure_sentence = f"To generate a room that looks like this image: <image>, the predicted program was {room_json_text}. This generated a room with top-down view like this image: <image>. The refined program would be: {gt_program_text}"

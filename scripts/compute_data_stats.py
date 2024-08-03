@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 import numpy as np
 import os
 import sys
@@ -7,6 +8,8 @@ from utils.ai2thor_utils import generate_program_from_roomjson
 import yaml
 import pdb
 import tqdm
+from matplotlib import pyplot as plt
+from wordcloud import WordCloud, STOPWORDS
 
 import re
 def get_object_class_from_asset(obj):
@@ -36,6 +39,8 @@ if __name__=="__main__":
 
     data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
 
+    asset_desc_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
+
     print("Number of rooms: ", len(data))
 
     avg_num_major_obj = []
@@ -45,7 +50,7 @@ if __name__=="__main__":
     all_room_types = []
     avg_num_corners = []
 
-    all_objs = {}
+    all_objs = defaultdict(int)
     all_obj_assets = {}
     all_window_assets = {}
     all_wall_floor_materials = {}
@@ -114,10 +119,10 @@ if __name__=="__main__":
         #        all_obj_assets[obj] = 1
 
         for obj_cls in all_obj_classes:
-            all_objs[obj_cls] = 1
+            all_objs[obj_cls] += 1
         
         for obj_cls in all_child_classes:
-            all_objs[obj_cls] = 1
+            all_objs[obj_cls] += 1
 
         for window in window_assets:
             all_window_assets[window] = 1
@@ -171,3 +176,46 @@ if __name__=="__main__":
     print("number of window assets: ", len(all_window_assets))
 
     print("number of wall/floor materials: ", len(all_wall_floor_materials))
+
+    # make a histogram of object classes using pyplot
+    obj_counts = []
+    obj_classes = []
+    for obj, count in all_objs.items():
+        obj_counts.append(count)
+        obj_classes.append(obj)
+    
+    sorted_indices = np.argsort(obj_counts)[::-1]
+    obj_counts = np.array(obj_counts)
+    obj_classes = np.array(obj_classes)
+    obj_counts = obj_counts[sorted_indices]
+    obj_classes = obj_classes[sorted_indices]
+
+    plt.figure(figsize=(30, 30))
+    plt.bar(obj_classes, obj_counts)
+    plt.xticks(rotation=90, fontsize=7)
+    plt.savefig("object_class_histogram.pdf")
+
+
+    asset_words = []
+    for entry in asset_desc_data:
+        asset_desc = entry[-1].lower()
+        
+        desc_words = asset_desc.split(" ")
+
+        asset_words.extend(desc_words)
+
+    asset_words = " ".join(asset_words)
+
+    # make a word cloud
+    wordcloud = WordCloud(width = 800, height = 800,
+                background_color ='white',
+                stopwords = ["a", "A", "the", "on", "in", "and", "of", "with"],
+                min_font_size = 10).generate(asset_words)
+ 
+    # plot the WordCloud image                       
+    plt.figure(figsize = (8, 8), facecolor = None)
+    plt.imshow(wordcloud)
+    plt.axis("off")
+    plt.tight_layout(pad = 0)
+    
+    plt.savefig("asset_wordcloud.pdf")

@@ -5,6 +5,7 @@ import json
 import yaml
 import ast
 import pdb
+import random
 import numpy as np
 
 def tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z):
@@ -211,6 +212,102 @@ wall_material: {wall_material_tokens}
         room_programs.append((program_text, room_json.house_json, house_json))
 
     return room_programs
+
+def generate_attribute_program_from_roomjson(house_json, include_objects=True, include_windows=True, include_children=False, asset_desc=None):
+    # this takes the json of just a one room house and make a program for the room.
+    # for each room, we need polygon, floor material, wall materials, and objects at location and rotation
+   
+    room_id = house_json['rooms'][0]['id']
+    # get polygon
+    polygon = house_json['rooms'][0]['floorPolygon']
+
+    # get max dimensions
+    max_dim_x = max([point['x'] for point in polygon])
+
+    # max y_dim from wall height
+    max_dim_y = 0
+    for wall in house_json['walls']:
+        for point in wall['polygon']:
+            if point['y'] > max_dim_y:
+                max_dim_y = point['y']
+    
+    max_dim_z = max([point['z'] for point in polygon])
+
+    # pdb.set_trace()
+    # get floor material
+    floor_material = house_json['rooms'][0]['floorMaterial']['name']
+    
+    # tokenize polygon, floor material, and wall materials
+    polygon_tokens = tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z)
+    # pdb.set_trace()
+    floor_material_token = floor_material
+
+    wall_materials = []
+    for wall in house_json['walls']:
+        if wall['roomId'] == room_id:
+            wall_materials.append(wall['material']['name'])
+    wall_material_tokens = wall_materials
+
+    # get objects
+    shapely_polygon = Polygon([(room_point['x'], room_point['z']) for room_point in polygon])
+    objects = []
+    for obj in house_json['objects']:
+        # use shapely polygon to check if the object is inside the room
+        point = Point(obj['position']['x'], obj['position']['z'])
+        if shapely_polygon.contains(point):
+            objects.append(obj)
+    
+    # get windows
+    windows=[]
+    for ind, window in enumerate(house_json['windows']):
+        window_token = window['assetId']
+        window_position = get_token_from_coordinate(window['assetPosition']['x'], window['assetPosition']['y'], window['assetPosition']['z'], max_dim_x, max_dim_y, max_dim_z)
+        window_polygon = tokenize_polygon(window['holePolygon'], max_dim_x, max_dim_y, max_dim_z)
+        window_wall = window['wall0']
+
+        # find the window wall in program text
+        # window_wall_program_id = wall_id_to_programid[window_wall]
+        program_window_entry = (window_token, window_position, window_polygon, window_wall)
+        windows.append(program_window_entry)
+    
+    # make a program
+    # max_dims: [{max_dim_x}, {max_dim_y}, {max_dim_z}]
+    program_text = f"""
+polygon: {polygon_tokens}
+floor_material: '{floor_material_token}'
+wall_material: {wall_material_tokens}
+"""
+    if include_objects:
+        for ind, obj in enumerate(objects):
+            obj_token = obj['assetId']
+            obj_desc = random.choice(asset_desc[obj_token])[2]
+            obj_position = get_token_from_coordinate(obj['position']['x'], obj['position']['y'], obj['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+            obj_rotation = get_token_from_rotation(obj['rotation']['x'], obj['rotation']['y'], obj['rotation']['z'])
+            obj_id = obj['id']
+            # pdb.set_trace()
+            obj_entry_dict = f"{obj_desc} at location {obj_position} with rotation {obj_rotation}"
+            program_text += f"\nobj_{ind}: {obj_entry_dict}"
+
+            if 'children' in obj and include_children:
+                for child_ind, child in enumerate(obj['children']):
+                    child_token = child['assetId']
+                    child_position = get_token_from_coordinate(child['position']['x'], child['position']['y'], child['position']['z'], max_dim_x, max_dim_y, max_dim_z)
+                    child_rotation = get_token_from_rotation(child['rotation']['x'], child['rotation']['y'], child['rotation']['z'])
+                    child_parent_id = f"obj_{ind}"
+                    child_entry_dict = (child_token, child_position, child_rotation, child_parent_id)
+                    program_text += f"\nchild_{child_ind}: {child_entry_dict}"
+    
+    if include_windows:
+        for ind, window in enumerate(windows):
+            program_text += f"\nwindow_{ind}: {window}"
+
+    #### actually execute the program text to get the house json
+    program_text = program_text.replace("(", "[")
+    program_text = program_text.replace(")", "]")
+    
+    return program_text
+
+
 
 
 def generate_program_from_roomjson(house_json, include_objects=True, include_windows=True, include_children=True):

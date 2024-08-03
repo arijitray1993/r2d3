@@ -88,7 +88,8 @@ class GenericModule():
         self.metric_to_track = []
 
         # set up training
-        self.accelerator = Accelerator()
+        num_accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
+        self.accelerator = Accelerator(gradient_accumulation_steps=num_accumulation_steps)
         if train_dataloader is not None:
             self.num_epochs = max_epochs
             self.num_training_steps = self.num_epochs * len(train_dataloader)
@@ -117,6 +118,7 @@ class GenericModule():
             self.test_dataloader, self.model = self.accelerator.prepare(
                 self.test_dataloader, self.model)
         self.eval_every = eval_every
+        # self.grad_acc_step = 1
         
 
     def train(self,):
@@ -124,49 +126,54 @@ class GenericModule():
         self.global_step = 0
         for epoch in range(self.num_epochs):
             for batch in self.train_dataloader:
-                #outputs = self.model.forward(*[batch[inp] for inp in self.model_input_choice])
-                # try:
-                # pdb.set_trace()
-                outputs = self.model.forward(**{inp: batch[inp] for inp in self.model_input_choice})
-                #except:
-                #    print("Error in forward pass. Skipping step...")
-                #    # clear cuda memory
-                #    torch.cuda.empty_cache()
-                #    gc.collect()
-                #    continue
-                loss = outputs.loss
+                with self.accelerator.accumulate(self.model):
+                    #outputs = self.model.forward(*[batch[inp] for inp in self.model_input_choice])
+                    # try:
+                        # pdb.set_trace()
+                    outputs = self.model.forward(**{inp: batch[inp] for inp in self.model_input_choice})
+                    # except:
+                    #   pdb.set_trace()
+                    #    print("Error in forward pass. Skipping step...")
+                    #    # clear cuda memory
+                    #    torch.cuda.empty_cache()
+                    #    gc.collect()
+                    #    continue
+                    loss = outputs.loss
+                    
+                    if self.cfg.get("use_feature_loss"):
+                        # pdb.set_trace()
+                        feature_loss = outputs["im_feature_loss"]
+                        total_loss = self.cfg.feature_lambda * feature_loss + (1-self.cfg.feature_lambda) * loss
+                        loss = total_loss
 
-                if self.cfg.get("use_feature_loss"):
-                    # pdb.set_trace()
-                    feature_loss = outputs["im_feature_loss"]
-                    total_loss = self.cfg.feature_lambda * feature_loss + (1-self.cfg.feature_lambda) * loss
-                    loss = total_loss
+                    # check if loss is nan
+                    if math.isnan(loss.item()):
+                        # pdb.set_trace()
+                        print("Loss is nan. Skipping step...")
+                        self.optimizer.zero_grad()
+                        continue
+                    
+                    
+                    self.accelerator.backward(loss)
 
-                # check if loss is nan
-                if math.isnan(loss.item()):
-                    # pdb.set_trace()
-                    print("Loss is nan. Skipping step...")
-                    continue
-                self.accelerator.backward(loss)
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
 
-                self.optimizer.step()
-                self.lr_scheduler.step()
-                self.optimizer.zero_grad()
+                    progress_bar.set_description(f"train_loss: {loss.item()}")
+                    progress_bar.update(1)
+                    self.logger.log({"train_loss": loss.item(), "step": self.global_step})
 
-                progress_bar.set_description(f"train_loss: {loss.item()}")
-                progress_bar.update(1)
-                self.logger.log({"train_loss": loss.item(), "step": self.global_step})
+                    # validate at certain intervals
+                    if (self.global_step % self.eval_every == 0) and self.global_step>10000:
+                        self.validate()
+                    
+                        # compute metrics after running all eval loop
+                        for entry in self.metrics:
+                            metric_name = entry[0]
+                            getattr(self, metric_name).compute()
 
-                # validate at certain intervals
-                if (self.global_step % self.eval_every == 0) and epoch>0:
-                    self.validate()
-                
-                    # compute metrics after running all eval loop
-                    for entry in self.metrics:
-                        metric_name = entry[0]
-                        getattr(self, metric_name).compute()
-
-                self.global_step += 1
+                    self.global_step += 1
  
     def validate(self,):
         progress_bar = tqdm.tqdm(range(len(self.test_dataloader)))
@@ -266,10 +273,7 @@ def main(cfg: DictConfig):
             cfg.valtrain_dataset_args, model.tokenizer, model.image_processor
         )
     
-    if cfg.get("val_batch_size"):
-        val_batch_size = cfg.val_batch_size
-    else:
-        val_batch_size = cfg.batch_size
+    val_batch_size=1
 
     dataloader_val = DataLoader(
         dataset_val,
@@ -283,6 +287,10 @@ def main(cfg: DictConfig):
     # =========== Define training choices ===========================
     if cfg.eval_only:
         model.eval()  # turns batch norm off.
+        model.requires_grad = False
+        for param in model.parameters():
+            param.requires_grad = False
+            
     
     # pdb.set_trace()
     if cfg.get("tune_lora"):
@@ -307,10 +315,28 @@ def main(cfg: DictConfig):
                 modules_to_save=["transformer_encoder_block", "feat_projection", "mm_projector"],
             ) 
         else:
+            if cfg.get("freeze_vision"):
+                cls_l = torch.nn.Linear
+                lora_module_names = set()
+                multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
+                for name, module in model.named_modules():
+                    if any(mm_keyword in name for mm_keyword in multimodal_keywords):
+                        continue
+                    if isinstance(module, cls_l):
+                        #names = name.split('.')
+                        lora_module_names.add(name)
+
+                if 'lm_head' in lora_module_names: # needed for 16-bit
+                    lora_module_names.remove('lm_head')
+                lora_module_names = list(lora_module_names)
+            else:
+                lora_module_names = ["q_proj", "v_proj"]
+
+            # pdb.set_trace()
             lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                target_modules=["q_proj", "v_proj"],
+                r=128,
+                lora_alpha=256,
+                target_modules=lora_module_names,
                 lora_dropout=0.1,
                 bias="none",
                 modules_to_save=[],
@@ -318,7 +344,6 @@ def main(cfg: DictConfig):
 
         #model.model.gradient_checkpointing_enable()
         #model.model = prepare_model_for_kbit_training(model.model)
-
 
         if cfg.get("lora_model_path"):
             lora_model = PeftModel.from_pretrained(model, cfg.get("lora_model_path"))
@@ -346,11 +371,6 @@ def main(cfg: DictConfig):
 
         # pdb.set_trace()
         print("Lora models loaded...")
-
-        if cfg.get('freeze_vision'):
-            model_og = getattr(models, cfg.model_choice)(cfg.model_init_args)
-            lora_model.model.model.model.vision_tower = model_og.model.model.vision_tower
-            lora_model.model.model.model.vision_tower.requires_grad = False
         
         #if cfg.get('offload_vision'):
         #    lora_model.model.model.model.vision_tower.cpu()

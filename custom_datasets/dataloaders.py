@@ -5,6 +5,7 @@ import random
 from collections import defaultdict
 import itertools
 from itertools import combinations
+import functools
 import pickle as pkl
  
 import torch
@@ -45,7 +46,7 @@ from llava.constants import (
     IMAGE_PLACEHOLDER,
 )
 import csv
-from utils.ai2thor_utils import generate_program_from_roomjson, format_program
+from utils.ai2thor_utils import generate_program_from_roomjson, format_program, generate_attribute_program_from_roomjson
 
 import numpy as np
 
@@ -194,814 +195,120 @@ def mark_objects_instance_specific(segmentation_frames, image_frames):
         marked_images.append(image_frame)
 
 
-class LSUNBedrooms(Dataset):
-    def __init__(self, args):
-        self.args = args
+def normalize_coords(program_text, cam_pos, cam_rot, attr=False):
 
-        self.tokenizer, _, self.image_processor, self.context_len = load_pretrained_model(
-                model_path=args['model_path'],
-                model_base=None,
-                model_name=get_model_name_from_path(args['model_path'])
-        )
-        self.batch_decode = self.tokenizer.batch_decode
+    # convert prgram text to json using yaml
+    room_json = yaml.load(program_text, Loader=yaml.FullLoader)
 
-        self.dataset = load_dataset("pcuenq/lsun-bedrooms")[args["split"]]
+    room_polygon = room_json['polygon']
+    room_polygon_norm = [(point[0] - cam_pos[0], point[2] - cam_pos[1]) for point in room_polygon]
+    room_polygon_norm = [(point[0]*np.cos(np.deg2rad(cam_rot)) - point[1]*np.sin(np.deg2rad(cam_rot)), point[0]*np.sin(np.deg2rad(cam_rot)) + point[1]*np.cos(np.deg2rad(cam_rot))) for point in room_polygon_norm]
+    room_polygon = [(int(point[0]), 0,  int(point[1])) for point in room_polygon_norm]
 
-
-    def __getitem__(self, idx):
-        bedroom_im = self.dataset[idx]["image"]
-
-        num_corner = 4
-        prefix_text = f"## <image> . The room polygon is [(961, 0), (961, 576), (1345, 576), (1345, 0)]. The 3D specifications: \n"
-    
-        return [bedroom_im, ], prefix_text
-    
-    def __len__(self):
-        return len(self.dataset)
-    
-    def collate_fn(self, batch):
-        images, prompts = zip(*batch)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
-        
-        new_images = []
-        for image in images:
-            image = image[0]
-            image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-            image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            new_images.append(image)
-        
-        pixel_values = torch.stack(new_images, dim=0)
-
-        # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids,
-            "pixel_values": pixel_values,
-            "text_labels": prompts,
-            "image_lists": images,
-        }
-
-        return return_dict
-
-
-class ADE20K(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
-        
-        self.ade_image_folder_path = "/projectnb/ivc-ml/array/data/ADE20K_2021_17_01/images/ADE/validation/home_or_hotel"
-
-        self.seg_images = []
-        for folder in os.listdir(self.ade_image_folder_path):
-            for im_file in os.listdir(os.path.join(self.ade_image_folder_path, folder)):
-                self.seg_images.append(os.path.join(folder, im_file))
-
-        # keep only the _seg images
-        self.seg_images = [x for x in self.seg_images if "_seg" in x]
-
-        self.ade_color_to_obj = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_color_to_obj.json"))
-        _, _, self.obj_to_color = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json"))
+    i = 0
+    while(True):
+        if f'obj_{i}' not in room_json:
+            break
+        if attr:
+            obj_entry = room_json[f'obj_{i}']
+            gt_object = obj_entry.split("at location")[0].strip()
+            location = ast.literal_eval(obj_entry.split("at location")[-1].split("with rotation")[0].strip())
+            rotation = ast.literal_eval(obj_entry.split("with rotation")[-1].strip())
+        else:
+            gt_object, location, rotation = room_json[f'obj_{i}']
+        norm_location = (location[0] - cam_pos[0], location[1], location[2] - cam_pos[1])
+        norm_location = (norm_location[0]*np.cos(np.deg2rad(cam_rot)) - norm_location[2]*np.sin(np.deg2rad(cam_rot)), norm_location[0]*np.sin(np.deg2rad(cam_rot)) + norm_location[2]*np.cos(np.deg2rad(cam_rot)))
         # pdb.set_trace()
+        norm_rotation = rotation[1] - cam_rot
+        if norm_rotation < 0:
+            norm_rotation += 360
+        room_json[f'obj_{i}'] = (gt_object, (int(norm_location[0]), int(location[1]), int(norm_location[1])), norm_rotation)
+        i += 1
 
-    def __getitem__(self, idx):
-        seg_image = self.seg_images[idx]
+    i = 0
+    while(True):
+        if f'child_{i}' not in room_json:
+            break
+        if attr:
+            child_entry = room_json[f'child_{i}']
+            child_obj = child_entry.split("at location")[0].strip()
+            location = ast.literal_eval(child_entry.split("at location")[-1].split("with rotation")[0].strip())
+            rotation = ast.literal_eval(child_entry.split("with rotation")[-1].strip())
+        else:
+            child_obj, location, rotation = room_json[f'child_{i}']
+        norm_location = (location[0] - cam_pos[0], location[1], location[2] - cam_pos[1])
+        norm_location = (norm_location[0]*np.cos(np.deg2rad(cam_rot)) - norm_location[2]*np.sin(np.deg2rad(cam_rot)), norm_location[0]*np.sin(np.deg2rad(cam_rot)) + norm_location[2]*np.cos(np.deg2rad(cam_rot)))
+        norm_rotation = rotation[1] - cam_rot
+        if norm_rotation < 0:
+            norm_rotation += 360
+        room_json[f'child_{i}'] = (child_obj, (int(norm_location[0]), int(location[1]), int(norm_location[1])), norm_rotation)
+        i += 1
+    
+    i = 0
+    while(True):
+        if f'window_{i}' not in room_json:
+            break
 
-        segmentation_frame = Image.open(os.path.join(self.ade_image_folder_path, seg_image)).convert("RGB")
-        '''
-        segmentation_frame = np.array(segmentation_frame)
-        
-        all_colors = segmentation_frame.reshape(-1, 3)
-        unique_colors = set([tuple(color) for color in all_colors])
+        window_token, window_position, window_polygon, window_wall = room_json[f'window_{i}']
+        window_position_norm = (window_position[0] - cam_pos[0], window_position[1], window_position[2] - cam_pos[1])
+        window_position_norm = (window_position[0]*np.cos(np.deg2rad(cam_rot)) - window_position[2]*np.sin(np.deg2rad(cam_rot)), window_position[0]*np.sin(np.deg2rad(cam_rot)) + window_position[2]*np.cos(np.deg2rad(cam_rot)))
+        room_json[f'window_{i}'] = (window_token, (int(window_position[0]), int(window_position[1]), int(window_position[2])), window_polygon, window_wall)
+        i += 1
+    
+    # make room_json back to program_text
+    program_text = program_text = f"""
+polygon: {room_polygon}
+floor_material: '{room_json['floor_material']}'
+wall_material: {room_json['wall_material']}
+"""
 
-        # pdb.set_trace()
-        for color in unique_colors:
-            if str(color) in self.ade_color_to_obj:
-                ade_obj_name = self.ade_color_to_obj[str(color)]
-            else: 
-                print(str(color))
-                print("couldnt find object")
-                ade_obj_name = "wall"
+    i = 0
+    while(True):
+        if f'obj_{i}' not in room_json:
+            break
+        gt_object, location, rotation = room_json[f'obj_{i}']
+        if attr:
+            program_text += f"""\nobj_{i}: {gt_object} at location {location} with rotation {rotation}"""
+        else:
+            program_text += f"""\nobj_{i}: [{gt_object}, {location}, {rotation}]"""
+        i += 1
+    
+    i = 0
+    while(True):
+        if f'child_{i}' not in room_json:
+            break
+        child_obj, location, rotation = room_json[f'child_{i}']
+        if attr:
+            program_text += f"""\nchild_{i}: {child_obj} at location {location} with rotation {rotation}"""
+        else:
+            program_text += f"""\nchild_{i}: [{child_obj}, {location}, {rotation}]"""
+        i += 1
+    
+    i = 0
+    while(True):
+        if f'window_{i}' not in room_json:
+            break
+        window_token, window_position, window_polygon, window_wall = room_json[f'window_{i}']
+        if attr:
+            program_text += f"""\nwindow_{i}: {window_token} at location {window_position} with polygon {window_polygon} on wall {window_wall}"""
+        else:
+            program_text += f"""\nwindow_{i}: [{window_token}, {window_position}, {window_polygon}, {window_wall}]"""
+        i += 1
+    
+
+    return program_text
+
+
+def interleave_iterators(*iterators):
+    finished = [False for x in range(len(iterators))]
+    stop_cond = functools.reduce(lambda x,y:not x or not y,finished)
+    while stop_cond:
+        for i,it in enumerate(iterators):
             try:
-                new_color = self.obj_to_color[ade_obj_name]
-            except:
-                print("couldnt find mapping to color used in training")
-                new_color = self.obj_to_color["wall"]
-            
-            # repeat new colors the number of times color appears
-            new_color = np.array(new_color)
-            new_color = np.tile(new_color, (np.sum(np.all(all_colors == color, axis=1)), 1))
-
-            # add a bit of random gaussian noise
-            if self.args.get('add_noise'):
-                if self.args['split']=="train":
-                    # new_color = new_color + np.random.normal(0, random.choice([2,4,6,8,10]), new_color.shape)
-                    new_color = new_color + np.random.normal(0, 4, new_color.shape)
-                else:
-                    new_color = new_color + np.random.normal(0, 4, new_color.shape)
-                
-            all_colors[np.all(all_colors == color, axis=1)] = new_color
-        
-        image = all_colors.reshape(segmentation_frame.shape)
-        image = Image.fromarray(image)
-        # pdb.set_trace()
-        '''
-        image = segmentation_frame 
-        caption = ""
-
-        prefix_text = f"## <image> . The room polygon is [(961, 0), (961, 576), (1345, 576), (1345, 0)]. The 3D specifications: \n"
-    
-        return image, prefix_text, [os.path.join(self.ade_image_folder_path, seg_image),]
-
-    def __len__(self):
-        return len(self.seg_images)
-    
-    def collate_fn(self, batch):
-        images, prompts, image_list = zip(*batch)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
-        
-        new_images = []
-        for image in images:
-            image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-            #if self.args.get('add_noise'):
-            #    image = image + np.random.normal(0, 4, image.shape)
-            # pdb.set_trace()
-            image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            
-            new_images.append(image)
-        
-        pixel_values = torch.stack(new_images, dim=0)
-
-        # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids,
-            "pixel_values": pixel_values,
-            "text_labels": prompts,
-            "image_lists": image_list,
-        }
-
-        return return_dict
-
-
-class AnyImageCaption(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor
-       
-        self.batch_decode = self.tokenizer.batch_decode
-
-        self.image_data_path = args['image_data_path']
-        
-        self.data = []
-        for image_path in os.listdir(self.image_data_path):
-            if ".jpeg" in image_path or ".jpg" in image_path or ".png" in image_path:
-                self.data.append(os.path.join(self.image_data_path, image_path))
-            # self.data.append(os.path.join(self.image_data_path, image_path))
-
-        self.polygons = {
-            'bedroom_1': [(0, 0), (0,600), (600, 600), (600, 0)],
-            'bedroom_2': [(0, 0), (0,600), (400, 600), (400, 0)],
-            'bedroom_3': [(0, 0), (0,400), (600, 400), (600, 0)],
-            'living_room_1': [(0, 0), (0,400), (600, 400), (600, 0)],
-            'living_room_2': [(0, 0), (0,400), (600, 400), (600, 0)],
-            'living_room_3': [(0, 0), (0,400), (600, 400), (600, 0)],
-            'toilet_1': [(0, 0), (0,400), (600, 400), (400, 0)],
-            'toilet_2': [(0, 0), (0,400), (600, 400), (600, 0)],
-            'dalle_livingroom': [(0, 0), (0,400), (600, 400), (600, 0)],
-        }
-
-        self.cams = {
-            'bedroom_1': (300, 300),
-            'bedroom_2': (30, 30),
-            'bedroom_3': (300, 300),
-            'living_room_1': (300, 300),
-            'living_room_2': (300, 300),
-            'living_room_3': (300, 300),
-            'toilet_1': (300, 300),
-            'toilet_2': (20, 20),
-            'dalle_livingroom': (300, 300),
-        }
-        self.args = args
-
-    def __getitem__(self, idx):
-       
-        image_path = self.data[idx]
-        
-        image = Image.open(image_path).convert("RGB")
-
-        room_type = image_path.split("/")[-1].split(".")[0]
-        format_polygon_coords = str(self.polygons[room_type])
-        camera_prompt = f"Image taken from (x,z) {self.cams[room_type]}."
-        prefix = f"## <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n"
-        
-        return [image_path, ], image, prefix
-    
-    def __len__(self):
-        return len(self.data)
-    
-    def collate_fn(self, batch):
-        im_files, images, prompts = zip(*batch)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
-        
-        new_images = []
-        for image in images:
-            image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-            image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            new_images.append(image)
-        
-        pixel_values = torch.stack(new_images, dim=0)
-
-        # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids,
-            "pixel_values": pixel_values,
-            "program_texts": prompts,
-            "text_labels": prompts,
-            "image_lists": im_files,
-        }
-
-        return return_dict
-
-
-
-class ProcTHOR_failure_refine(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-        
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
-
-        caption_data = json.load(
-            open(
-                "/projectnb/ivc-ml/array/research/robotics/dreamworlds/"
-                + "custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly_new.json", "r"
-                )
-            )
-
-        # get the data only for which we have captions
-        json_program_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train.json"))
-        json_data = []
-        for ind, all_room_captions in caption_data:
-            json_data.append((json_program_data[ind], all_room_captions))
-
-        # pdb.set_trace()
-        self.failure_data = json.load(open(self.args.get('failure_data_path')))
-
-        self.image_data_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/"
-        # only use the json data we have images for
-        self.data = []
-        self.summary_data = []
-        for ind, (room_data, room_captions) in enumerate(json_data):
-            all_imgs = room_data[4]
-            if len(all_imgs) < 2:
-                continue
-            if len(room_captions) < 2:
-                continue
-            if not os.path.exists(all_imgs[0]):
-                continue
-            self.data.append((room_data, room_captions))
-        
-        print("Total number of data points: ", len(self.data))
-
-        # split into train and test
-        if args["split"] == "train":
-            self.data = self.data[:int(len(self.data) * 0.8)]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[int(len(self.data) * 0.8):int(len(self.data) * 0.9)]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[int(len(self.data) * 0.9):]
-            self.split = "test"
-
-        print(f"Total number of data in {args['split']}: ", len(self.data))
-
-        self.closest_ai2thor_to_ade, self.ai2assetname_to_objname, self.obj_to_color = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json"))
-    
-    def __getitem__(self, idx):
-        # randomly choose og data or failure data
-        if random.random() < 0.25:
-            room_data, all_room_captions = self.data[idx]
-            program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
-            program_text = generate_program_from_roomjson(house_json)
-
-            image_path = random.sample(all_seg_frames, 1)
-            caption_image  = random.choice(all_room_captions)
-            image = Image.open(image_path[0]).convert("RGB")
-            # segmentation_frame = np.array(image)
-            # new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
-
-            caption = caption_image[-1]
-
-            num_corner = len(all_imgs) # since we have an image from each corner.
-            
-            prefix_options = [
-                f"## <image> An interactive room like the image can be rendered as: \n",
-                f"## <image> Can you render a room with {num_corner} corners that looks like the image? Surely: \n",
-                f"## <image> A room with {num_corner} corners with description: {caption}. The yaml is: \n",
-                f"## <image> Can you render a room with that looks like the image? Surely: \n",
-                f"## <image> {caption}. Generate such a room with {num_corner} corners as: \n",
-                f"## <image> {caption}. The yaml for the room with {num_corner} corners: \n ",
-                f"## <image> {caption}. We can generate it as: \n",
-                f"## <image> {caption}. How can I render it? Like this: \n",
-            ]
-
-            if self.args['mode'] in ["val", "valtrain"]:
-                prefix_text = prefix_options[8]
-            else:
-                prefix_text = random.choice(prefix_options)
-        
-            if self.args['mode'] == "train":
-                prompt = prefix_text + program_text + " \n###"
-                text_labels = prompt
-            else:
-                prompt = prefix_text
-                text_labels = prefix_text + program_text + " \n###"
-
-            # pdb.set_trace()
-            
-            return [image,], caption, prompt, text_labels, [image_path[0],], house_json
-
-        else:
-            failure_sentence, input_im, current_im = self.failure_data[idx%len(self.failure_data)]
-            image1 = Image.open(input_im).convert("RGB")
-
-            # convert from panoptic to ade
-            # segmentation_frame = Image.open(current_im).convert("RGB")
-            # new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
-
-            image2 = Image.open(current_im).convert("RGB")
-            prompt = f"# {failure_sentence} \n###"
-
-            if self.args['mode'] == "train":
-                text_labels = prompt
-            else:
-                text_labels = prompt
-                prompt = prompt.split("refined program would be: ")[0] 
-            # pdb.set_trace()
-            return [image1, image2], failure_sentence, prompt, text_labels, [input_im, current_im], 0
-
-    def __len__(self,):
-        return len(self.data)
-
-    def collate_fn(self, batch):
-        
-        images_batch, captions, prompts, text_labels, image_file_list, house_jsons = zip(*batch)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            # chop off at 1400 len
-            if len(input_id) > 1300:
-                input_id = input_id[:1300]
-            input_ids.append(input_id)
-            attention_mask.append   (torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)   
-
-        attention_mask = torch.stack(attention_mask, dim=0)
-
-        new_images = []
-        for images in images_batch:
-            for image in images:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                new_images.append(image)
-
-        pixel_values = torch.stack(new_images, dim=0)
-
-        # pdb.set_trace()
-        return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "labels": input_ids,
-                "pixel_values": pixel_values,
-                "program_texts": prompts,
-                "text_labels": text_labels,
-                "image_lists": image_file_list,
-                'house_json': house_jsons,
-            }
-        
-        return return_dict
-
-
-class ProcTHOR_multiview(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
-        
-        multiview_json_data_split_1 = json.load(
-            open(
-                "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_densemultiview.json", "r"
-            )
-        )
-
-        multiview_json_data_split_2 = json.load(
-            open(
-                "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_densemultiview_split2.json", "r"
-            )
-        )
-
-        self.data = []
-        for program_text, house_json, og_house_json, cam_ind_to_position, all_imgs in multiview_json_data_split_1 + multiview_json_data_split_2:
-            if len(all_imgs) < 2:
-                continue
-            self.data.append((program_text, house_json, og_house_json, cam_ind_to_position, all_imgs))
-
-        # self.data = multiview_json_data_split_1 + multiview_json_data_split_2
-
-        self.image_data_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/denseviews/images"
-
-        if args["split"] == "train":
-            self.data = self.data[:int(len(self.data) * 0.9)]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[int(len(self.data) * 0.8):int(len(self.data) * 0.9)]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[int(len(self.data) * 0.9):]
-            self.split = "test"
-
-        print("Total number of data points: ", len(self.data))
-
-    def __getitem__(self, idx):
-        program_text, house_json, og_house_json, cam_ind_to_position, all_imgs = self.data[idx]
-
-        program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
-
-        if self.args.mode == "train":    
-            num_images_to_use = random.choice([10, 15, 20, 40, 50, 100, 75, 25, 80, 90])
-            image_choices = random.sample(all_imgs, min(len(all_imgs), num_images_to_use))
-        else:
-            num_images_to_use = 10
-            image_choices = random.sample(all_imgs, min(len(all_imgs), num_images_to_use))
-
-        camera_poses = []
-        for image_path in image_choices:
-            position_ind = image_path.split("_")[-1].split(".")[0]
-            position, rotation = cam_ind_to_position[position_ind]
-            camera_poses.append((position['x'], position['z'], rotation['y']))
-
-        all_images = [Image.open(image_path).convert("RGB") for image_path in image_choices]
-
-        room = house_json['rooms'][0]
-        polygon = room['floorPolygon']
-        polygon_coords = [(point['x'], point['z']) for point in polygon]
-        room_polygon = Polygon(polygon_coords)
-        simplified_polygon = room_polygon.simplify(0.001)
-        format_polygon_coords = []
-        for point in list(simplified_polygon.exterior.coords):
-            format_polygon_coords.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-        
-        format_polygon_coords = str(format_polygon_coords[:-1])
-
-        prefix = f"## {'<image>'*len(image_choices)} The room polygon is {format_polygon_coords}. List the 3D specifications: #room \n"
-
-        if self.args['mode'] == "train":
-            prompt = prefix + program_text + " \n###"
-            text_labels = prompt
-        else:
-            prompt = prefix
-            text_labels = prefix + program_text + " \n###"
-
-        # pdb.set_trace()
-        return all_images, prompt, text_labels, image_choices, house_json, camera_poses
-
-    def __len__(self):
-        return len(self.data)
-
-    def collate_fn(self, batch):
-        images_batch, prompts, text_labels, image_paths, house_jsons, camera_poses = zip(*batch)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
-
-        new_images = []
-        for images in images_batch:
-            for image in images:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                # pdb.set_trace()
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                new_images.append(image)
-
-        pixel_values = torch.stack(new_images, dim=0)
-
-        camera_pos_inp = torch.tensor(camera_poses, dtype=torch.float32)
-
-        # pdb.set_trace()
-        # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids,
-            "pixel_values": pixel_values,
-            "program_texts": prompts,
-            "text_labels": text_labels,
-            "image_lists": image_paths,
-            'house_json': house_jsons,
-            'camera_pos': camera_pos_inp,
-        }
-        # pdb.set_trace()
-        return return_dict
-        
-
-
-
-class ProcTHOR_caption_only(Dataset):
-    def __init__(self, args, tokenizer, image_processor=None):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.batch_decode = self.tokenizer.batch_decode
-
-        json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
-
-        if self.args.get("use_topdown"):
-            caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions_topdown.json"))
-        else:
-            caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
-
-        self.apartment_ind_to_caption = {}
-        for apartment_ind, image_file, caption in caption_data:
-            self.apartment_ind_to_caption[apartment_ind] = (image_file, caption)
-
-        self.data = []
-        for entry in json_data:
-            if len(entry[4]) < 1:
-                continue
-            if not os.path.exists(entry[4][0]):
-                continue
-
-            apartment_ind = entry[4][0].split("/")[-2]
-            if apartment_ind not in self.apartment_ind_to_caption:
-                continue
-
-            self.data.append(entry)
-        
-
-        if args["split"] == "train":
-            self.data = self.data[:11000]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[11000:11100]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[-100:]
-            self.split = "test"
-    
-        print("Total number of data points: ", len(self.data))
-
-    def __getitem__(self, idx):
-        room_data = self.data[idx]
-
-        program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
-        program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
-
-        apartment_id = all_imgs[0].split("/")[-2]
-        image_path, caption = self.apartment_ind_to_caption[apartment_id]
-
-        # image = Image.open(image_path).convert("RGB")
-
-        room = house_json['rooms'][0]
-        polygon = room['floorPolygon']
-        polygon_coords = [(point['x'], point['z']) for point in polygon]
-        # pdb.set_trace()
-        room_polygon = Polygon(polygon_coords)
-        
-        format_polygon_coords_num = []
-        for point in list(room_polygon.exterior.coords):
-            format_polygon_coords_num.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-        
-        format_polygon_coords = str(format_polygon_coords_num[:-1])
-
-
-        prefix = [f"## Render a room with a layout polygon {format_polygon_coords}. {caption}. List the exact 3D specifications: \n",
-                f"## Generate a room with a layout polygon {format_polygon_coords}. {caption}. The 3D specifications for such a room: \n",
-                f"## {caption}. The room polygon is {format_polygon_coords}. The 3D specifications: \n",
-            ]
-        
-        if self.args['mode'] == "train":
-            prompt = random.choice(prefix) + program_text + " \n###"
-            text_labels = prompt
-        else:
-            prompt = random.choice(prefix)
-            text_labels = prompt + program_text + " \n###"
-        
-        return caption, prompt, text_labels, program_text, house_json
-    
-    def __len__(self):
-        return len(self.data)
-    
-    def collate_fn(self, batch):
-
-        captions, prompts, text_labels, program_texts, house_jsons = zip(*batch)
-
-        if self.args.get("codellama"):
-            inputs = tokenizer(prompts, return_tensors="pt", padding=True)
-            input_ids = inputs["input_ids"]
-            attention_mask = inputs["attention_mask"]
-        else:
-            input_ids = []
-            attention_mask = []
-            for prompt in prompts:
-                # pdb.set_trace()
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            input_ids = torch.stack(input_ids, dim=0)
-            attention_mask = torch.stack(attention_mask, dim=0)
-        
-        # pdb.set_trace()
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids,
-            "prompts": prompts,
-            "text_labels": text_labels,
-            "program_texts": program_texts,
-            "house_json": house_jsons,
-            "caption": captions,
-        }
-
-        return return_dict
-
-class ProcTHOR_image_only(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
-        
-
-        json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
-
-        caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
-
-        self.apartment_ind_to_caption = {}
-        for apartment_ind, image_file, caption in caption_data:
-            self.apartment_ind_to_caption[apartment_ind] = (image_file, caption)
-
-        self.data = []
-        for entry in json_data:
-            if len(entry[4]) < 1:
-                continue
-            if not os.path.exists(entry[4][0]):
-                continue
-
-            apartment_ind = entry[4][0].split("/")[-2]
-            if apartment_ind not in self.apartment_ind_to_caption:
-                continue
-
-            self.data.append(entry)
-
-        if args["split"] == "train":
-            self.data = self.data[:11000]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[11000:11100]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[-100:]
-            self.split = "test"
-    
-        print("Total number of data points: ", len(self.data))
-        
-    def __getitem__(self, idx):
-        room_data = self.data[idx]
-
-        program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
-        program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
-
-        apartment_id = all_imgs[0].split("/")[-2]
-        image_path, caption = self.apartment_ind_to_caption[apartment_id]
-
-        room = house_json['rooms'][0]
-        polygon = room['floorPolygon']
-        polygon_coords = [(point['x'], point['z']) for point in polygon]
-        # pdb.set_trace()
-        room_polygon = Polygon(polygon_coords)
-
-        format_polygon_coords_num = []
-        for point in list(room_polygon.exterior.coords):
-            format_polygon_coords_num.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-        
-        format_polygon_coords = str(format_polygon_coords_num)
-
-        corner_ind = image_path.split("/")[-1].split(".")[0]
-
-        # pdb.set_trace()
-        camera_poses = cam_ind_to_position[corner_ind]
-
-        pos, rot = camera_poses
-
-        cam_pos = (int(round(pos['x'],2)*100), int(round(pos['z'],2)*100))
-        cam_angle = int(rot['y'])
-        
-        prefix_options = [
-            f"## <image> The room polygon is {format_polygon_coords}. The image was taken from camera position {cam_pos} with an angle {cam_angle}. A plausible 3d specification for the room: \n",
-            f"## <image> The room polygon is {format_polygon_coords}. The image was taken from camera position {cam_pos} with an angle {cam_angle}. The 3D specifications could be: \n",
-            f"## <image> The room polygon is {format_polygon_coords}. The image was taken from camera position {cam_pos} with an angle {cam_angle}. The 3D specifications might be: \n",
-        ]
-
-        if self.args['mode'] == "train":
-            prompt = random.choice(prefix_options) + program_text + " \n###"
-            text_labels = prompt
-        else:
-            prompt = random.choice(prefix_options)
-            text_labels = prompt + program_text + " \n###"
-
-        image_ind = all_imgs.index(image_path)
-        objs_present = all_objs[image_ind]
-
-
-        # pdb.set_trace()
-        return image_path, caption, prompt, text_labels, program_text, house_json, objs_present
-    
-    def __len__(self):
-        return len(self.data)
-
-    def collate_fn(self, batch):
-        image_paths, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
-
-        new_images = []
-        for image in image_paths:
-            image = Image.open(image).convert("RGB")
-            image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-            # pdb.set_trace()
-            image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            new_images.append(image)
-
-        pixel_values = torch.stack(new_images, dim=0)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
-            # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
-        
-        # pdb.set_trace()
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            'pixel_values': pixel_values,
-            "labels": input_ids,
-            "prompts": prompts,
-            "text_labels": text_labels,
-            "program_texts": program_texts,
-            "house_json": house_jsons,
-            "image_paths": image_paths,
-            'objs_present': objs_present,
-        }
-
-        return return_dict
+                yield next(it)
+            except StopIteration:
+                finished[i] = True
+        stop_cond = functools.reduce(lambda x,y:not x or not y,finished)
 
 
 class MixLLavaProcthor(Dataset):
@@ -1009,25 +316,29 @@ class MixLLavaProcthor(Dataset):
         self.args = args
         self.tokenizer = tokenizer
         self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
 
-        procthor_data = ProcTHOR_image_camposition_marked(args, tokenizer, image_processor)
-        llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
+        self.procthor_data = ProcTHOR_image_camposition_marked(args, tokenizer, image_processor)
+        self.llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
+        self.proc_len = len(self.procthor_data)
+        self.llava_len = len(self.llava_data)
+        
+        # self.data = interleave_iterators(procthor_data, llava_data)
 
-        self.data = itertools.chain(
-            procthor_data,
-            llava_data
-        )
+        print("combined data ...")
 
-        weights = [2]*len(procthor_data) + [1]*len(llava_data)
-
-        self.sampler = WeightedRandomSampler(weights, len(self.data))
+        print("Total number of data points: ", self.proc_len + self.llava_len)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        if random.random() < 0.7:
+            return self.procthor_data[idx%self.proc_len]
+        else:
+            return self.llava_data[idx%self.llava_len]
+        
     
     def __len__(self):
-        return len(self.data)
-    
+        return max(self.proc_len, self.llava_len)
+
     def collate_fn(self, batch):
         image_paths, imgs, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
 
@@ -1048,8 +359,11 @@ class MixLLavaProcthor(Dataset):
             input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
             input_ids.append(input_id)
             attention_mask.append(torch.ones_like(input_id))
-        input_ids = torch.stack(input_ids, dim=0)
-        attention_mask = torch.stack(attention_mask, dim=0)
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
         
         # pdb.set_trace()
         return_dict = {
@@ -1074,108 +388,110 @@ class LLaVAInstructTune(Dataset):
         self.args = args
         self.tokenizer = tokenizer
         self.image_processor = image_processor
-        json_data = json.load("/projectnb/ivc-ml/array/data/llava_data/llava_v1_5_mix665k.json")
+        json_data = json.load(open("/projectnb/ivc-ml/array/data/llava_data/llava_v1_5_mix665k.json"))
         
         self.image_path = "/projectnb/ivc-ml/array/data/llava_data/image_data"
         
         self.data = []
 
-        for entry in json_data:
-            im_path = entry['image']
-            if not os.path.exists(im_path):
+        for entry in tqdm.tqdm(random.sample(json_data, args.get('num_data_points'))):
+            
+            im_path = entry.get('image')
+
+            # pdb.set_trace()
+            if im_path is None:
+                continue
+
+            if not os.path.exists(os.path.join(self.image_path, im_path)):
                 continue
             
             if len(entry['conversations'])%2!=0:
                 continue
 
             for question, answer in zip(entry['conversations'][::2], entry['conversations'][1::2]):
-                self.data.append((im_path, question['value'], answer['value']))
+                self.data.append((os.path.join(self.image_path, im_path), question['value'], answer['value']))
+
         
-        print("Total number of data points: ", len(self.data))
+        if args.get("split") == "train":
+            self.data = self.data[:int(len(self.data)*0.9)]
+        else:
+            self.data = self.data[int(len(self.data)*0.9):]
+        
+        print("Total number of data points in instructtune: ", len(self.data))
 
     def __getitem__(self, idx):
         im_file, question, answer = self.data[idx]
         
+        #if im_file is not None:
         img = [Image.open(im_file).convert("RGB"),]
+        #else:
+        #    img = Image.new("RGB", (224, 224), (255, 255, 255)) 
 
-        if "<image>\n" not in question:
-            question = "<image>\n" + question
+        if im_file is not None:
+            if "<image>" not in question:
+                question = question + " <image> \n"
         
-        prompt = f"## {question} \n Answer: {answer} \n###"
+        if self.args['mode'] == "train":
+            prompt = f"## Answer in natural language. {question} \n Answer: \n {answer} \n###"
+            text_labels = prompt
+        else:
+            prompt = f"## {question} \n Answer: \n"
+            text_labels = prompt + answer + " \n###"
 
         caption = prompt
-        text_labels = prompt
+        
         program_text = ""
         house_json = {}
         objs_present = []
-
+        # pdb.set_trace()
         return [im_file,], img, caption, prompt, text_labels, program_text, house_json, objs_present
     
     def __len__(self):
         return len(self.data)
 
-class ProcTHOR_depth_reasoning(Dataset):
-    def __init__(self, args, tokenizer, image_processor):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
-        json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
-        
-        topdown_caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions_topdown.json"))
-        # else:
-        caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
-
-        apid_to_topdown_caption = {}
-        for apid, image_file, caption in topdown_caption_data:
-            apid_to_topdown_caption[apid] = caption
-
-        self.apartment_ind_to_caption = {}
-        for apartment_ind, image_file, caption in caption_data:
-            #pdb.set_trace()
-            # if apartment_ind in caption_data:
-            self.apartment_ind_to_caption[apartment_ind] = (image_file, apid_to_topdown_caption.get(apartment_ind, ""))
-        # pdb.set_trace()
-        self.data = []
-        for entry in json_data:
-            if len(entry[4]) < 1:
-                continue
-            if not os.path.exists(entry[4][0]):
-                continue
-
-            apartment_ind = entry[4][0].split("/")[-2]
-            if apartment_ind not in self.apartment_ind_to_caption:
-                continue
-
-            self.data.append(entry)
-        
-        print("Total number of data points: ", len(self.data))
-
-        if args["split"] == "train":
-            self.data = self.data[:11000]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[11000:11100]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[-550:]
-            self.split = "test"
-    
-        print("Total number of data points in split: ", len(self.data))
-
-        print("Now filter based on depth reasoning data available")
-        
-        
-        pass
-    
-    def __getitem__(self, idx):
-        pass
-    
-    def __len__(self):
-        pass
-
     def collate_fn(self, batch):
-        pass
+        image_paths, imgs, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
+
+        new_images = []
+        for image_b in imgs:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "program_texts": program_texts,
+            "house_json": house_jsons,
+            "image_lists": image_paths,
+            'objs_present': objs_present,
+        }
+
+        return return_dict
+
+
 
 
 class ProcTHOR_image_camposition_marked(Dataset):
@@ -1183,7 +499,8 @@ class ProcTHOR_image_camposition_marked(Dataset):
         self.args = args
         self.tokenizer = tokenizer
         self.image_processor = image_processor 
-        self.batch_decode = self.tokenizer.batch_decode
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
 
         json_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
 
@@ -1192,6 +509,21 @@ class ProcTHOR_image_camposition_marked(Dataset):
         # else:
         caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
 
+        # asset_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
+        self.asset_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json"))
+        # contains, im_file, obj_class, caption
+
+        #pdb.set_trace()
+        #self.asset_desc = {}
+        #for asset_id in asset_desc:
+        #    asset_entry = random.choice(asset_desc[asset_id])
+        #    self.asset_desc[asset_id] = (asset_entry[1], asset_entry[2])
+
+        # self.asset_desc = {}
+        #for image_file, asset_name, object_class, caption in asset_desc:
+        #    self.asset_desc[asset_name] = (object_class, caption)
+
+
         apid_to_topdown_caption = {}
         for apid, image_file, caption in topdown_caption_data:
             apid_to_topdown_caption[apid] = caption
@@ -1230,25 +562,18 @@ class ProcTHOR_image_camposition_marked(Dataset):
         print("Total number of data points in split: ", len(self.data))
         
     def __getitem__(self, idx):
+        
         room_data = self.data[idx]
 
         program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
-        program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
+
+        if self.args.get("use_attributes"):
+            program_text = generate_attribute_program_from_roomjson(house_json, include_children=self.args.get('include_children'), asset_desc=self.asset_desc)
+        else:
+            program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
 
         apartment_id = all_imgs[0].split("/")[-2]
         image_path, caption = self.apartment_ind_to_caption[apartment_id]
-
-        room = house_json['rooms'][0]
-        polygon = room['floorPolygon']
-        polygon_coords = [(point['x'], point['z']) for point in polygon]
-        # pdb.set_trace()
-        room_polygon = Polygon(polygon_coords)
-
-        format_polygon_coords_num = []
-        for point in list(room_polygon.exterior.coords):
-            format_polygon_coords_num.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-        
-        format_polygon_coords = str(format_polygon_coords_num)
 
         corner_ind = image_path.split("/")[-1].split(".")[0]
 
@@ -1261,6 +586,14 @@ class ProcTHOR_image_camposition_marked(Dataset):
         cam_angle = int(rot['y'])
         
         
+        if self.args.get("normalize_rotation"):
+            program_text = normalize_coords(program_text, cam_pos, cam_angle, attr=self.args.get("use_attributes"))
+            cam_pos = (0, 95, 0)
+            cam_angle = 0
+
+        program_json = yaml.load(program_text, Loader=yaml.FullLoader)
+        format_polygon_coords = str(program_json['polygon'])
+
         image_ind = all_imgs.index(image_path)
         
         seg_frame = Image.open(all_seg_frames[image_ind]).convert("RGB")
@@ -1287,7 +620,11 @@ class ProcTHOR_image_camposition_marked(Dataset):
                     continue
                 obj = cfg_dict[f'obj_{i}']
                 # print(obj[1])
-                obj_pos = obj[1]
+                if self.args.get("use_attributes"):
+                    obj_pos = obj.split("at location ")[-1].split(" with")[0]
+                    obj_pos = ast.literal_eval(obj_pos)
+                else:
+                    obj_pos = obj[1]
                 dist_to_camera = np.sqrt((obj_pos[0] - cam_pos[0])**2 + (obj_pos[2] - cam_pos[1])**2)
 
                 if self.args.get("randomize_point") or self.args.get("use_multimarks"):
@@ -1405,6 +742,28 @@ class ProcTHOR_image_camposition_marked(Dataset):
                 img = Image.blend(og_img, img.convert("RGB"), 0.2)
                 
                 img = [add_red_dot_with_text(img, (x,y), "1"),]
+                new_im_file = "/".join(image_path.split("/")[:-1])+f"/{corner_ind}_depth_greyoverlay.png"
+            elif self.args.get("use_depth_greyoverlay_nopoint"):
+                depth_path = image_path.replace(".png", "_depth.pt")
+                depth = torch.load(depth_path)
+
+                depth = depth.squeeze().numpy()
+
+                d_min = 1
+                d_max = 500
+                prediction = np.clip(depth, d_min, d_max)
+                prediction = (d_min/prediction) - (prediction-d_min)/((d_max-d_min)*d_max/d_min)
+
+                depth = ((1-prediction) * 255).astype(np.uint8)
+                # pdb.set_trace()
+                img = Image.fromarray(depth[:,:],  'L')
+
+                # stich og image and depth side by side
+                og_img = Image.open(image_path).convert("RGB")
+                # pdb.set_trace()
+                img = Image.blend(og_img, img.convert("RGB"), 0.2)
+                
+                img = [img,]
                 new_im_file = "/".join(image_path.split("/")[:-1])+f"/{corner_ind}_depth_greyoverlay.png"
 
             elif self.args.get("use_depth_yuv"):
@@ -1534,7 +893,10 @@ class ProcTHOR_image_camposition_marked(Dataset):
                     camera_prompt = f"Image taken from (x,z) {cam_pos}."
                     if self.args.get("use_angle"):
                         camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}."
-            
+
+                if self.args.get("use_depth_greyoverlay_nopoint"):
+                    camera_prompt = f"The image has been overlayed with depth with darker colors meaning more depth (farther away from camera, which means higher z). Image taken from (x, y, z) {cam_pos} with rotation angle clockwise around y as {cam_angle}. "
+
         else:
             if self.args.get("captiononly_baseline"):
                 camera_prompt = ""
@@ -1550,6 +912,9 @@ class ProcTHOR_image_camposition_marked(Dataset):
                     camera_prompt = f"Image taken from (x,z) {cam_pos}."
                     if self.args.get("use_angle"):
                         camera_prompt = f"Image taken from (x,z) {cam_pos} with angle around y as {cam_angle}."
+                
+                if self.args.get("use_depth_greyoverlay_nopoint"):
+                    camera_prompt = f"The image has been overlayed with depth with darker colors meaning more depth. Image taken from (x, y, z) {cam_pos} with rotation angle clockwise around y as {cam_angle}. "
 
 
         if self.args.get("use_caption"):
@@ -1564,27 +929,59 @@ class ProcTHOR_image_camposition_marked(Dataset):
             prefix_options = [
                 f"## The room polygon is (x,z) {format_polygon_coords}. {caption} Plausible 3D coordinates (x, y,z) for the room: \n",
             ]
+        elif self.args.get("use_incontext"):
+
+            if self.args.get("incontext_language"):
+                prefix_options = [
+                    f"## <image> Imagine that in a 3D cubical space looking from the top down, x goes from left to right, y comes out towards the camera out of the plane, and z goes from bottom to top. \
+The rotations are always specified as around the y axis (axis coming towards camera) with respect to positive z-axis rotating clockwise in the top down view. \
+For instance, 90 degrees rotation means pointing towards the positive x axis (towards the right when looking from top down) and so on. \
+The image was taken by placing the camera at (x,z) {cam_pos} with rotation as {cam_angle} degrees. \
+Please try to estimate a rich description of the room- the floor, walls and the objects present. Each object should be in a separate line along with the 3D position. The 3D locations x, y, z should follow the above conventions and the rotation as well.\
+Please generate the description in the following format: \n \
+Floor material:  material/color of the floor eg dark wood or white etc \n \
+Wall material: material/color of the wall eg white or tiles etc \n \
+Object 1: Object description at location (x,y,z) with rotation D degrees. eg, brown wooden bed at location (10,20,15) with rotation 80 degrees. \n \
+And so on. \n \
+Remember that each object is in a separate line. \
+Can you please do this for the image shown? Please just output the description in the above format and no other text. \n \
+\n Answer: \n",
+                ]
+            elif self.args.get("incontext_pointmark"):
+                prefix_options = [
+                    f"## <image> In this image, x increases from left to right, y increases from bottom to top, and z increases towards the direction you are looking at (depth). \
+You are at ({cam_pos[0]}, 95, {cam_pos[1]}). \
+The red dot marked in the image is at {max_dist_obj_pos}. Using this information, can you roughly estimate the locations of all the objects in the room? Just try to the best of your abilities. Objects to the left of the dot will have a lower x. Objects closer to the camera from the dot will have a lower z. And, objects lower in height from the camera height will have a lower y.  \
+Please output each object along with the location on each line with no other text in the following format: \n Object name at location (x, y, z). eg, Brown bed at (10, 15, 20) \
+\n Answer: \n",
+                ]
+            
         else:
             if self.args.get("no_camera_prompt"):
                 prefix_options = [
-                    f"## <image> The room polygon is (x,z) {format_polygon_coords}. Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
+                    f"## Answer in a structured JSON format. <image> The room polygon is (x,z) {format_polygon_coords}. Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
                 ]
             elif self.args.get("no_polygon"):
                 prefix_options = [
-                    f"## <image> {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
+                    f"## Answer in a structured JSON format. <image> {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
                 ]
             else:
                 prefix_options = [
-                    f"## <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
+                    f"## Answer in a structured JSON format. <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
                 ]
 
         if self.args['mode'] == "train":
-            prompt = random.choice(prefix_options) + program_text + " \n###"
+            prompt = random.choice(prefix_options) + "\n Answer: \n" + program_text + " \n###"
             text_labels = prompt
-        else:
-            prompt = random.choice(prefix_options)
+        else:    
+            prompt = random.choice(prefix_options) + "\n Answer: \n"
             text_labels = prompt + program_text + " \n###"
+            if self.args.get('input_polygon_test'):
+                polygon_line = program_text.split("\n")[1]
+                prompt +=  "\n"+polygon_line + " \n"
+            
 
+        # pdb.set_trace()
         image_ind = all_imgs.index(image_path)
         objs_present = all_objs[image_ind]
 
@@ -1630,608 +1027,493 @@ class ProcTHOR_image_camposition_marked(Dataset):
             "image_lists": image_paths,
             'objs_present': objs_present,
         }
-
+        # pdb.set_trace()
         return return_dict
     
 
+#### all image qa real datasets
 
-class ProcTHOR_image_caption(Dataset):
+class GQA(Dataset):
     def __init__(self, args, tokenizer, image_processor):
-        self.args = args
         
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+        
+        gqa_path = "/projectnb/ivc-ml/array/data/GQA/" 
+
+        if args['split'] == "valtrain":
+            data = json.load(open(os.path.join(gqa_path, "val_all_questions.json")))
+        elif args['split'] == "val":
+            data = json.load(open(os.path.join(gqa_path, "val_all_questions.json")))
+        elif args['split'] == "train":
+            data = json.load(open(os.path.join(gqa_path, "train_all_questions.json")))
+
+        self.data = []
+        for qid in data:
+            question = data[qid]['question']
+            answer = data[qid]['answer']
+            image_id = data[qid]['imageId']
+            im_file = os.path.join(gqa_path, "images", f"{image_id}.jpg")
+            self.data.append((question, answer, im_file))
+
+        self.data = self.data[:args['num_data_points']]
+
+        print("Split: ", args['split'])
+        print("Total number of data points ", len(self.data))
+
+
+    def __getitem__(self, idx):
+        question, answer, im_file = self.data[idx]
+
+        image = Image.open(im_file).convert("RGB")
+
+        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+
+        return [image,], prompt, answer, question, "GQA"
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        
+        images, prompts, answers, questions, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+        
+        text_labels = []
+        for prompt, ans in zip(prompts, answers):
+            
+            text_label = prompt + ans
+            text_labels.append(text_label)
+
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            'labels': input_ids,
+            'text_labels': text_labels,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "prompts": prompts,
+            'answers': answers,
+            "dataset": datanames
+        }
+        # pdb.set_trace()
+        return return_dict
+
+
+class VQAV2(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.vqa_path = "/projectnb/ivc-ml/array/data/VQA/VQAV2"
+
+        vqa_anno = json.load(open(os.path.join(self.vqa_path, "v2_mscoco_val2014_annotations.json")))
+        vqa_ques = json.load(open(os.path.join(self.vqa_path, "v2_OpenEnded_mscoco_val2014_questions.json")))
+
+        self.data = []
+        for anno_entry, ques_entry in zip(vqa_anno['annotations'], vqa_ques['questions']):
+            assert anno_entry['question_id'] == ques_entry['question_id']
+            question = ques_entry['question']
+            answer = anno_entry['multiple_choice_answer']
+            image_id = anno_entry['image_id']
+            im_file = os.path.join(self.vqa_path, "val2014", f"COCO_val2014_{str(image_id).zfill(12)}.jpg")
+            self.data.append((question, answer, im_file))
+        
+        self.data = self.data[:args['num_data_points']]
+
+    def __getitem__(self, idx):
+        question, answer, im_file = self.data[idx]
+
+        image = Image.open(im_file).convert("RGB")
+
+        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+
+        return [image,], prompt, answer, question, "vqav2"
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        images, prompts, answers, questions, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+
+        text_labels = []
+        for prompt, ans in zip(prompts, answers):
+            text_label = prompt + ans
+            text_labels.append(text_label)
+
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            'labels': input_ids,
+            'text_labels': text_labels,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "prompts": prompts,
+            'answers': answers,
+            "dataset": datanames
+        }
+        # pdb.set_trace()
+        return return_dict
+        
+class OKVQA(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.okvqa_path = "/projectnb/ivc-ml/array/data/VQA/OKVQA"
+
+        okvqa_anno = json.load(open(os.path.join(self.okvqa_path, "mscoco_val2014_annotations.json")))
+        okvqa_ques = json.load(open(os.path.join(self.okvqa_path, "OpenEnded_mscoco_val2014_questions.json")))
+
+        self.data = []
+        for anno_entry, ques_entry in zip(okvqa_anno['annotations'], okvqa_ques['questions']):
+            assert anno_entry['question_id'] == ques_entry['question_id']
+            question = ques_entry['question']
+            answer = anno_entry['answers'][0]['answer']
+            image_id = anno_entry['image_id']
+            im_file = os.path.join(self.okvqa_path, "val2014", f"COCO_val2014_{str(image_id).zfill(12)}.jpg")
+            self.data.append((question, answer, im_file))
+        
+        self.data = self.data[:args['num_data_points']]
+
+    def __getitem__(self, idx):
+        question, answer, im_file = self.data[idx]
+
+        image = Image.open(im_file).convert("RGB")
+
+        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+
+        text_label = prompt + answer
+
+        return [image,], prompt, answer, text_label, "okvqa"
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        images, prompts, answers, text_labels, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+
+
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            'labels': input_ids,
+            'text_labels': text_labels,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "prompts": prompts,
+            'answers': answers,
+            'dataset': datanames
+        }
+        # pdb.set_trace()
+        return return_dict
+
+
+class AllVQA(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.gqa = GQA(args, tokenizer, image_processor)
+        self.vqav2 = VQAV2(args, tokenizer, image_processor)
+        self.okvqa = OKVQA(args, tokenizer, image_processor)
+        
+    
+    def __getitem__(self, idx):
+        if idx < len(self.gqa):
+            return self.gqa[idx]
+        elif idx < len(self.gqa) + len(self.vqav2):
+            return self.vqav2[idx - len(self.gqa)]
+        else:
+            return self.okvqa[idx - len(self.gqa) - len(self.vqav2)]
+    
+    def __len__(self):
+        return len(self.gqa) + len(self.vqav2) + len(self.okvqa)
+    
+    def collate_fn(self, batch):
+        return self.gqa.collate_fn(batch)
+
+class MMBench(Dataset):
+    def __init__(self, args):
+        
+        pass
+
+    def __getitem__(self, idx):
+        pass
+
+    def __len__(self):
+        pass
+
+    def collate_fn(self, batch):
+        pass
+
+class SeedBench(Dataset):
+    pass
+
+
+class CVBench(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        cv_bench = load_dataset("nyu-visionx/CV-Bench")
         self.tokenizer = tokenizer
         self.image_processor = image_processor 
         self.batch_decode = self.tokenizer.batch_decode
 
-        # get the data only for which we have captions
-        #if args.get('use_14k'):
-        # json_program_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_all_14k.json"))
-        json_program_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/final_data_neurips.json"))
-        caption_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GPT4V_room_descriptions.json"))
+        self.data = cv_bench['test'].shuffle(seed=42)
 
-        self.apartment_ind_to_caption = {}
-        for apartment_id, im, cap in caption_data:
-            self.apartment_ind_to_caption[apartment_id] = (im, cap)
-
-        #else:
-        #    json_program_data = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/procthor_roomjson_programs_imgs_train_childrenadded_all.json"))
-        # use generate_cfg_data_ProcTHOR.py and all generate_cfg_data_ProcTHOR_split*.py and then collate_room_json_data.py to generate this.
+        # random.shuffle(self.data)
+        self.data = self.data[:args['num_data_points']]
         
-        if self.args.get('use_top_down') or self.args.get('use_top_down_seg') or self.args.get('use_top_down_normal') or self.args.get('top_down_pretrained'):
-            json_data = json_program_data
-        elif self.args.get('use_all_data'):
-            json_data = json_program_data
-        else:
-            json_data = json_program_data
-
-        self.image_data_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/images"
-        
-        # have only the json data we have top down for
-        topdown_data = []
-        for entry in json_data:
-            # pdb.set_trace()
-            all_imgs = entry[4]
-            if len(all_imgs) < 1:
-                continue
-            if not os.path.exists(all_imgs[0]):
-                continue
-            
-            topdown_im = "/".join(all_imgs[0].split("/")[:-1]) + "/top_down.png"
-            topdown_feat = "/".join(all_imgs[0].split("/")[:-1]) + "/top_down_feats.pt"
-
-            if not os.path.exists(topdown_im) or not os.path.exists(topdown_feat):
-                continue
-            
-            topdown_data.append(entry)
-
-        self.data = topdown_data
-
-        print("Total number of data points: ", len(self.data))
-
-        # split into train and test
-        if args["split"] == "train":
-            self.data = self.data[:11000]
-            self.split = "train"
-        elif args["split"] == "valtrain":
-            self.data = self.data[11000:11100]
-            self.split = "val"
-        elif args["split"] == "val":
-            self.data = self.data[-100:]
-            self.split = "test"
-
-        print(f"Total number of data in {args['split']}: ", len(self.data))
-
-        # self.closest_ai2thor_to_ade, self.ai2assetname_to_objname, self.obj_to_color = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/ade_to_ai2thor.json"))
+        self.choice_to_number = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7} 
 
     def __getitem__(self, idx):
-        room_data = self.data[idx]
+        '''
+        {'idx': 0,
+        'type': '2D',
+        'task': 'Count',
+        'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=256x256>,
+        'question': 'How many organs are in the image?',
+        'choices': ['3', '2', '1', '0'],
+        'answer': '(C)',
+        'prompt': 'How many organs are in the image? Select from the following choices.\n(A) 3\n(B) 2\n(C) 1\n(D) 0',
+        'filename': 'img/2D/count/ade20k_10.png',
+        'source': 'ADE20K',
+        'source_dataset': 'ADE20K Validation Set',
+        'source_filename': 'ADE_val_00000248.jpg',
+        'target_class': None,
+        'target_size': None,
+        'bbox': None}
+        '''
+        image = self.data['image'][idx]
+        question = self.data['question'][idx]
+
+        prompt = "## Answer in natural language. " + question + " Answer the question using a single word or phrase. <image> \n Answer: \n"
+        choices = self.data['choices'][idx]
+        answer = self.data['answer'][idx]
+        answer = answer.replace("(", "").replace(")", "")
+        answer = choices[self.choice_to_number[answer]]
+
+        type_task = self.data['type'][idx] + "_" + self.data['task'][idx]
         
-        program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
+        text_label = prompt + answer
+        return [image,], prompt, text_label, answer, f"cvbench_{type_task}"
         
-        cap_im, caption = self.apartment_ind_to_caption[all_imgs[0].split("/")[-2]]
-
-        camera_poses = []
-        program_text = generate_program_from_roomjson(house_json, include_children=self.args.get('include_children'))
-        # program_text = format_program(program_text)
-
-        # choose an image at random to feed in and the caption from another image at random
-        objs_present = []
-        top_feats_gt = None
-        if self.args.get('use_seg_im'):
-            selected_paths = random.sample(list(zip(all_seg_frames, all_objs)), self.args.get('num_images'))
-            image_path = [x[0] for x in selected_paths]
-            objs_present = [x[1] for x in selected_paths]
-            if self.args.get('im_only'):
-                caption_image = ["", ""]
-            
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('use_seg_real_im'):
-            image_path = random.choice(all_room_captions)
-            seg_image_path = image_path[1]
-            real_image_path = image_path[0]
-            image_path = [seg_image_path, real_image_path]
-            
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('use_top_down'):
-            image_path_topdown = all_imgs[0].replace(".png", "_topdown.png")
-            image_path_topdown_seg = all_imgs[0].replace(".png", "_topdown_seg.png")
-            image_path = [image_path_topdown, image_path_topdown_seg]
-            caption_image  = ["", td_caption_data[-1]]
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('use_top_down_seg'):
-            image_path_topdown_seg = all_imgs[0].replace(".png", "_topdown_seg.png")
-            image_path = [image_path_topdown_seg, ]
-            caption_image  = ["", td_caption_data[-1]]
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('use_top_down_normal'):
-            image_path_topdown = all_imgs[0].replace(".png", "_topdown.png")
-            seg_image_path = random.choice(all_room_captions)[1]
-            image_path = [image_path_topdown, seg_image_path]
-            caption_image = ["", td_caption_data[-1]] 
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('use_top_down_loss'):
-            image_topdown_feats_path = "/".join(all_imgs[0].split("/")[:-1])+ "/top_down_feats.pt" # use precompute_top_clip_feats.py in scripts/
-
-            top_feats_gt = torch.load(image_topdown_feats_path)
-            
-            image_path_inds = [all_imgs.index(cap_im),]  # random.sample(range(0, len(all_imgs)), 1) # random.choice(range(1, len(all_imgs) + 1)))
-            image_path = [all_imgs[ind] for ind in image_path_inds]
-            objs_visible = [all_objs[ind] for ind in image_path_inds]
-
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-            camera_poses = []
-            for im_path in image_path:
-                corner_ind = im_path.split("/")[-1].split(".")[0]
-                # pdb.set_trace()
-                camera_poses.append(cam_ind_to_position[corner_ind])
-            
-            for obj in objs_visible:
-                objs_present.extend(obj)
-            caption = ""
-
-        elif self.args.get('all_corner_seg_ims'):
-            seg_images = all_seg_frames
-            caption_image = ["", ""]
-            if self.args.get("tile_images"):
-                images = [Image.open(os.path.join(self.image_data_path, im_path)) for im_path in seg_images]
-
-                if self.args.get('recolor_instance_wise'):
-                    images = color_instance_specific(images, color_to_objid)
-                
-                # Calculate total width and maximum height
-                total_width = sum(image.width for image in images)
-                max_height = max(image.height for image in images)
-
-                # Create a new blank image with the correct size
-                new_image = Image.new('RGB', (total_width, max_height))
-
-                # Paste images into the new image
-                x_offset = 0
-                for image in images:
-                    new_image.paste(image, (x_offset, 0))
-                    x_offset += image.width
-
-                images = [new_image,]
-                # pdb.set_trace()
-                image_path = seg_images
-                camera_poses = []
-                for im_path in seg_images:
-                    corner_ind = im_path.split("_")[2]
-                    camera_poses.append(cam_ind_to_position[corner_ind])
-            else:
-                image_path = seg_images
-                images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-        elif self.args.get('all_corner_ims'):
-            caption_image = ["", ""] #td_caption_data[-1]]
-            if self.args.get("tile_images"):
-                images = [Image.open(os.path.join(self.image_data_path, im_path)) for im_path in all_imgs]
-
-                # Calculate total width and maximum height
-                total_width = sum(image.width for image in images)
-                max_height = max(image.height for image in images)
-
-                # Create a new blank image with the correct size
-                new_image = Image.new('RGB', (total_width, max_height))
-
-                # Paste images into the new image
-                x_offset = 0
-                for image in images:
-                    new_image.paste(image, (x_offset, 0))
-                    x_offset += image.width
-
-                images = [new_image,]
-                image_path = all_imgs
-                
-            else:
-                # if self.args.get('mode') == "train":
-                image_path_inds = random.sample(range(0, len(all_imgs)), 1) # random.choice(range(1, len(all_imgs) + 1)))
-                image_path = [all_imgs[ind] for ind in image_path_inds]
-                objs_visible = [all_objs[ind] for ind in image_path_inds]
-                # else:
-                #    image_path = all_imgs
-                #    objs_visible = all_objs
-                images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-                camera_poses = []
-                for im_path in image_path:
-                    corner_ind = im_path.split("/")[-1].split(".")[0]
-                    # pdb.set_trace()
-                    camera_poses.append(cam_ind_to_position[corner_ind])
-                
-                for obj in objs_visible:
-                    objs_present.extend(obj)
-        elif self.args.get('all_corner_ims_priv'):
-            caption_image = ["", td_caption_data[-1]]
-            images = [Image.open(os.path.join(self.image_data_path, im_path)) for im_path in all_imgs]
-
-            # Calculate total width and maximum height
-            total_width = sum(image.width for image in images)
-            max_height = max(image.height for image in images)
-
-            # Create a new blank image with the correct size
-            new_image = Image.new('RGB', (total_width, max_height))
-
-            # Paste images into the new image
-            x_offset = 0
-            for image in images:
-                new_image.paste(image, (x_offset, 0))
-                x_offset += image.width
-
-            top_down_img = Image.open(all_imgs[0].replace(".png", "_topdown.png"))
-            if random.random() < 0.5:
-                images = [new_image, top_down_img]
-            else:
-                images = [new_image,]
-            image_path = all_imgs
-        else:
-            image_path = random.sample(all_imgs, self.args.get('num_images'))
-            # image_path = [x[0] for x in image_path]
-            caption_image = random.choice(all_room_captions)
-
-            images = [Image.open(im_path).convert("RGB") for im_path in image_path]
-
-        if self.args.get('use_seg_im'):
-            # convert the seg im colors to ade compatible colors. 
-            all_images = []
-            for image in images:
-                segmentation_frame = np.array(image)
-                
-                if self.args.get('use_panoptic'):
-                    new_segmentation_frame = segmentation_frame
-                else:
-                    # might be bugs here, just use panoptic, works fine. 
-                    new_segmentation_frame = convert_panoptic_to_ade_colors(segmentation_frame, color_to_objid, obj_id_to_name, self.ai2assetname_to_objname, self.closest_ai2thor_to_ade, self.obj_to_color)
-
-                image = Image.fromarray(new_segmentation_frame)
-                if self.args.get('use_depth_im'):
-                    depth_im_path = image_path[0].replace("_seg", "_depth")
-                    depth_im = Image.open(depth_im_path)
-                    # overlay the depth image on the seg image
-                    depth_im = depth_im.convert("RGB")
-                    depth_im = depth_im.resize(image.size)
-                    image = Image.blend(image, depth_im, self.args.get('depth_alpha'))
-
-                if self.args.get('blend_real_im'):
-                    real_im_path = image_path[0].replace("_seg", "")
-                    real_im = Image.open(real_im_path).convert("RGB")
-                    real_im = real_im.resize(image.size)
-                    image = Image.blend(image, real_im, self.args.get('real_alpha'))
-                all_images.append(image)
-        else:
-            all_images = images
-
-        # compute area of the room
-        room = house_json['rooms'][0]
-        polygon = room['floorPolygon']
-        polygon_coords = [(point['x'], point['z']) for point in polygon]
-        # pdb.set_trace()
-        room_polygon = Polygon(polygon_coords)
-        simplified_polygon = room_polygon # .simplify(0.001)
-        num_corner = len(simplified_polygon.exterior.coords) - 1
-        area = round(room_polygon.area, 2)
-
-        if self.args.get("polygon_guided"):
-            
-            format_polygon_coords_num = []
-            for point in list(simplified_polygon.exterior.coords):
-                format_polygon_coords_num.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-            
-            format_polygon_coords = str(format_polygon_coords_num[:-1])
-            # pdb.set_trace()
-
-            prefix_options = [
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. List the exact 3D specifications: \n",
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. The 3D specifications for such a room: \n",
-                f"## {'<image>'*len(images)} {caption}. The room polygon is {format_polygon_coords}. The 3D specifications: \n",
-                f"## {'<image>'*len(images)} {caption}. The 3D yaml for a room like this: \n",
-            ]
-            # pdb.set_trace()
-            if self.args['mode'] in ["val", "valtrain"]:
-                #if self.args.get('caption_only'):
-                #    prefix_text = prefix_options[3]
-                #elif self.args.get('im_only'):
-                #    prefix_text = prefix_options[0]
-                #else:
-                prefix_text = prefix_options[0]
-            else:
-                prefix_text = random.choice(prefix_options)
-        elif self.args.get("polygon_camera_guided"):
-            format_polygon_coords = []
-            for point in list(simplified_polygon.exterior.coords):
-                format_polygon_coords.append((int(round(point[0],2)*100), int(round(point[1],2)*100)))
-            
-            format_polygon_coords = str(format_polygon_coords[:-1])
-            camera_prompt = ""
-            #camera_prompt = "The image contains multiple room views. The camera position for each of the room views is specified in posiiton and rotation. The position is the 2D x,y coordinate in top down view. The rotation angle 0-360 is along the perpendicular axis coming out of the top down view: \n"
-            #for pos, rot in camera_poses:
-            #    camera_prompt += f"Position: {int(round(pos['x'], 2)*100)}, {int(round(pos['z'], 2)*100)}, Rotation: {int(rot['y'])} degrees \n "
-            #camera_prompt += "."
-            
-            prefix_options = [
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. {camera_prompt} List the 3D specifications: #room \n",
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. {camera_prompt} The 3D specifications: #room \n",
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. {camera_prompt} The 3D specifications: #room \n",
-                f"## {caption} The room polygon is {format_polygon_coords}. Can you list the 3D specifications? Surely: #room \n",
-                f"## {caption}. The 3D specifications for the room with polygon {format_polygon_coords} is: #room \n",
-                f"## {'<image>'*len(images)} The room polygon is {format_polygon_coords}. {camera_prompt} 3D specifications for a room like this: #room \n",
-            ]
-            # pdb.set_trace()
-            if self.args['mode'] in ["val", "valtrain"]:
-                if self.args.get('caption_only'):
-                    prefix_text = prefix_options[3]
-                elif self.args.get('im_only'):
-                    prefix_text = prefix_options[0]
-                else:
-                    prefix_text = prefix_options[2]
-            else:
-                prefix_text = random.choice(prefix_options)
-
-        else:
-            prefix_options = [
-                f"## {'<image>'*len(images)} List the exact 3D specifications: \n",
-                f"## {'<image>'*len(images)} {caption}. The exact 3D specifications for such a room with {num_corner} corners: \n",
-                f"## {'<image>'*len(images)} {caption}. The 3D specifications: \n",
-                f"## {'<image>'*len(images)} Can you list the 3D specifications of such a room with {num_corner} corners? Surely: \n",
-                f"## {'<image>'*len(images)} {caption}. The 3D specifications for the room with {num_corner} corners: \n ",
-                f"## {'<image>'*len(images)} 3D specifications for a room like this as: \n",
-            ]
-
-            if self.args['mode'] in ["val", "valtrain"]:
-                prefix_text = prefix_options[2]
-            else:
-                prefix_text = random.choice(prefix_options)
-
-        if self.args['mode'] == "train":
-            prompt = prefix_text + program_text + " \n###"
-            text_labels = prompt
-        else:
-            prompt = prefix_text
-            text_labels = prefix_text + program_text + " \n###"
-        # pdb.set_trace()
-        return all_images, caption, prompt, text_labels, image_path, house_json, objs_present, camera_poses, format_polygon_coords_num, top_feats_gt
-
     def __len__(self):
-        return len(self.data)
-
-    def collate_fn(self, batch):
-        images_batch, captions, prompts, text_labels, image_paths, house_jsons, objs_present, camera_poses, polygon_coords, top_feats_gts = zip(*batch)
-        # pdb.set_trace()
-        if self.args['model'] == 'llava':
-            input_ids = []
-            attention_mask = []
-            for prompt in prompts:
-                # pdb.set_trace()
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            input_ids = torch.stack(input_ids, dim=0)
-            attention_mask = torch.stack(attention_mask, dim=0)
-            
-            new_images = []
-            for images in images_batch:
-                for image in images:
-                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                    # pdb.set_trace()
-                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                    new_images.append(image)
-
-            pixel_values = torch.stack(new_images, dim=0)
-
-            camera_pos_inp = []
-            for pos, rot in camera_poses[0]:
-                camera_pos_inp.append([int(round(pos['x'],2)*100), int(round(pos['z'],2)*100), int(rot['y'])])
-            
-            camera_pos_inp = torch.tensor(camera_pos_inp, dtype=torch.float32)
-
-            # pdb.set_trace()
-            # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-            return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "labels": input_ids,
-                "pixel_values": pixel_values,
-                "program_texts": prompts,
-                "text_labels": text_labels,
-                "image_lists": image_paths,
-                'house_json': house_jsons,
-                'objs_present': objs_present,
-                'camera_pos': torch.tensor(camera_pos_inp),
-                'polygon': torch.tensor(polygon_coords),
-            }
-            if top_feats_gts[0] is not None:
-                return_dict['gt_im_features'] = torch.stack(top_feats_gts)[:,:,0,:]
-        # pdb.set_trace()
-        return return_dict
-
-class Structured3D(Dataset):
-    def __init__(self, args):
-
-        all_scene_ids = [str(index).rjust(5, '0') for index in range(0, 200)]
-
-        if args['mode'] == "train":
-            all_scene_ids = all_scene_ids[:int(len(all_scene_ids)*0.9)]
-        else:
-            all_scene_ids = all_scene_ids[int(len(all_scene_ids)*0.9):]
-
-        all_room_data = []
-        for scene_id in all_scene_ids:
-            scene_path = os.path.join(args.data_path, scene_id, "2D_rendering", f"all_room_data_{scene_id}.json")
-            room_data = json.load(open(scene_path))
-            for room_id in room_data:
-                scene_id, room_id, panorama, polygon, objs, obj_features = room_data[room_id]
-
-                # create program text from polygon, floor material, wall material, and objs
-                program_text = generate_program_from_polygon_objs(polygon, objs)
-
-                all_room_data.append(room_data[room_id])
+        return len(self.data['prompt'])
         
-        self.data = all_room_data
-
-    def __getitem__(self, idx):
-
-        
-        pass
-
-    def __len__(self):
-        return len(self.data)
-    
     def collate_fn(self, batch):
-        pass
+        images, prompts, text_labels, answers, datanames = zip(*batch)
 
-    
-
-            
-
-
-class ProcTHOR_Program_image(Dataset):
-    def __init__(self, args):
-        self.args = args
-        if args['model'] == "blip2":
-            self.processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
-            self.batch_decode = self.processor.batch_decode
-        elif args['model'] == "instructblip":
-            self.processor = InstructBlipProcessor.from_pretrained("Salesforce/instructblip-vicuna-7b")
-            self.batch_decode = self.processor.batch_decode
-        elif args['model'] == "llava":
-            self.tokenizer, _, self.image_processor, self.context_len = load_pretrained_model(
-                model_path=args['model_path'],
-                model_base=None,
-                model_name=get_model_name_from_path(args['model_path'])
-            )
-            self.batch_decode = self.tokenizer.batch_decode
-        elif args['model'] == "codellama":
-            self.tokenizer = CodeLlamaTokenizer.from_pretrained("codellama/CodeLlama-7b-hf")
-            self.batch_decode = self.tokenizer.batch_decode
-
-        self.json_data = json.load(
-            open(
-                "/projectnb/ivc-ml/array/research/robotics/dreamworlds/"
-                + "custom_datasets/procThor/all_room_json_programs_ai2_train_room_captions_gtobjonly.json", "r"
-                )
-            )
-
-        self.image_data_path = "/projectnb/ivc-ml/array/research/robotics/ProcTHOR/"
-        # only use the json data we have images for
-        self.data = []
-        for program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions in self.json_data:
-            if not os.path.exists(os.path.join("/projectnb/ivc-ml/array/research/robotics/ProcTHOR/", all_imgs[0])):
-                continue
-            self.data.append((program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions))
-
-        print("Total number of data points: ", len(self.data))
-
-        # split into train and test
-        if args["split"] == "train":
-            self.data = self.data[:int(len(self.data) * 0.9)]
-            self.split = "train"
-        elif args["split"] == "val":
-            self.data = self.data[int(len(self.data) * 0.9):]
-            self.split = "val"
-
-        self.tile_images = args['tile_images']
-
-    def __getitem__(self, idx):
-        program_text, house_json, cam_ind_to_position, all_imgs, all_objs, all_room_captions = self.data[idx]
-
-        # generate compact representation to fit in context length
-        program_text = generate_program_from_roomjson(house_json)
-        # pdb.set_trace()
-
-        if self.tile_images:
-            images = [Image.open(os.path.join(self.image_data_path, image_path)) for image_path in all_imgs]
-        
-            # Calculate total width and maximum height
-            total_width = sum(image.width for image in images)
-            max_height = max(image.height for image in images)
-
-            # Create a new blank image with the correct size
-            new_image = Image.new('RGB', (total_width, max_height))
-
-            # Paste images into the new image
-            x_offset = 0
-            for image in images:
-                new_image.paste(image, (x_offset, 0))
-                x_offset += image.width
-
-            image = new_image
-        else:
-            image_path = os.path.join(self.image_data_path, all_imgs[0])
-            image = Image.open(image_path).convert("RGB")
-
-        num_corner = len(all_imgs)
-        if self.args['model'] == "codellama":
-            env_desc = ""
-            prompt_text = f"## Write code: Can you write yaml for a 3D environment {env_desc} \n Answer: "
-        else:
-            if self.args.get('prompt_style') == "multi_images":
-                prompt_text = f"## {'<image>'*num_corner} \n Can you write yaml for a interactive room with {num_corner} corners that looks like these images? \n Answer: "
-            else:
-                prompt_text = f"## Write code: <image> \n Can you write yaml for a interactive room with {num_corner} corners that looks like these images? \n Answer: "
-
-        if self.split == "train":
-            program_text = prompt_text + program_text
-            text_labels = program_text
-        else:
-            text_labels = prompt_text + program_text
-            program_text = prompt_text
-
-        return image, program_text, text_labels, [os.path.join(self.image_data_path, image_path) for image_path in all_imgs]
-
-    def __len__(self):
-        return len(self.data)
-
-    def collate_fn(self, batch):
-        images, program_texts, text_labels, image_lists = zip(*batch)
-        # pdb.set_trace()
-        if self.args['model'] == 'llava':
-            input_ids = []
-            attention_mask = []
-            for prompt in program_texts:
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            input_ids = torch.stack(input_ids, dim=0)
-            attention_mask = torch.stack(attention_mask, dim=0)
-            new_images = []
-            for image in images:
+        new_images = []
+        for image_b in images:
+            for image in image_b:
                 image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
                 image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
                 new_images.append(image)
-            
-            pixel_values = torch.stack(new_images, dim=0)
 
-            # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
-            return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "labels": input_ids,
-                "pixel_values": pixel_values,
-                "program_texts": program_texts,
-                "text_labels": text_labels,
-                "image_lists": image_lists,
-            }
-        elif self.args['model'] == 'codellama':
-            inputs = self.tokenizer(program_texts, return_tensors="pt", padding=True)
-            return_dict = {
-                "input_ids": inputs.input_ids,
-                "attention_mask": inputs.attention_mask,
-                "labels": inputs.input_ids,
-                "program_texts": program_texts,
-                "text_labels": text_labels,
-                "image_lists": image_lists,
-            }
-        else:
-            inputs = self.processor(images=images, text=program_texts, return_tensors="pt", padding=True).to(torch.float16)
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
             # pdb.set_trace()
-            return_dict = {
-                "qformer_input_ids": inputs.qformer_input_ids,
-                "input_ids": inputs.input_ids,
-                "attention_mask": inputs.attention_mask,
-                "labels": inputs.input_ids,
-                "pixel_values": inputs.pixel_values,
-                "program_texts": program_texts,
-                "text_labels": text_labels,
-                "image_lists": image_lists,
-            }
-        #pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "prompts": prompts,
+            'answers': answers,
+            'dataset': datanames,
+            'labels': input_ids,
+
+            "text_labels": text_labels
+        }
+        # pdb.set_trace()
         return return_dict
+
+
+class BLINK(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+
+        dataset_name = 'BLINK-Benchmark/BLINK'
+
+        SUBTASK_NAME = ['Multi-view_Reasoning', 'Relative_Depth', 'Spatial_Relation', 'Object_Localization',]
+
+        self.data = []
+        for subtask in SUBTASK_NAME:
+            count = 0
+            for entry in load_dataset(dataset_name, subtask)['val']:
+                self.data.append((entry, subtask))
+                count += 1
+                if count >= args['num_data_points']/len(SUBTASK_NAME):
+                    break
+
+        self.choice_to_number = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7} 
+
+
+    def __getitem__(self, idx):
+        entry, subtask = self.data[idx]
+        question = entry['prompt'].split("?")[0]+"?"
+        # prompt = entry['prompt']
+        
+
+        answer = entry['answer']
+        answer = answer.replace("(", "").replace(")", "")
+        answer = entry['choices'][self.choice_to_number[answer]]
+
+        images = []
+        image_1 = entry['image_1']
+        images.append(image_1)
+        if entry['image_2'] is not None:
+            image_2 = entry['image_2']
+            images.append(image_2)
+
+        prompt = "## Answer in natural language. "+ question + " Answer the question using a single word or phrase. "+ "<image>"*len(images) + "\n Answer: \n"
+        text_label = prompt + answer
+
+        return images, prompt, answer, text_label, "BLINK_"+subtask
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        images, prompts, answers, text_labels, subtasks = zip(*batch)
+
+        new_images = []
+        for image_b in images:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            'labels': input_ids,
+            'text_labels': text_labels,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "prompts": prompts,
+            'answers': answers,
+            'dataset': subtasks,
+        }
+        # pdb.set_trace()
+        return return_dict
+
+
+class AllMLMBench(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.all_data =[
+            CVBench(args, tokenizer, image_processor),
+            BLINK(args, tokenizer, image_processor),
+        ]
+        
     
+    def __getitem__(self, idx):
+        if idx < len(self.all_data[0]):
+            return self.all_data[0][idx]
+        else:
+            return self.all_data[1][idx - len(self.all_data[0])]
+    
+    def __len__(self):
+        total_len = 0
+        for data in self.all_data:
+            total_len += len(data)
+        return total_len
+
+    def collate_fn(self, batch):
+        return self.all_data[0].collate_fn(batch)
+

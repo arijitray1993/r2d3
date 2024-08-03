@@ -1,4 +1,4 @@
-exp_name: llava_incomplete_oneim_campolygon_randompointorient
+exp_name: llava_incomplete_oneim_campolygonangle_randompointorient
 device: 'gpu'
 num_devices: 1
 num_workers: 1
@@ -6,7 +6,7 @@ num_workers: 1
 ### loading checkpoints, eval, train options
 num_epochs: 50
 batch_size: 1
-lr: 0.000003
+lr: 0.000005
 weight_decay: 0.000001
 lr_scheduler: "cosine"
 eval_only: False # if this is set to True, only the val dataset will be run.
@@ -27,7 +27,7 @@ train_dataset_args: {
   mode: "train",
   include_children: False,
   randomize_point: True,
-  include_angle: True,
+  use_angle: True,
 }
 train_collate_fn: "collate_fn"
 
@@ -38,8 +38,8 @@ valtrain_dataset_args: {
   split: "valtrain",
   mode: "val",
   include_children: False,
-  randomize_point: True,
-  include_angle: True,
+  use_no_mark_baseline: True,
+  use_angle: True,
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
@@ -49,7 +49,7 @@ val_dataset_args: {
   mode: "val",
   include_children: False,
   use_no_mark_baseline: True,
-  include_angle: True,
+  use_angle: True,
 }
 val_collate_fn: "collate_fn" 
 

@@ -22,8 +22,8 @@ if __name__=="__main__":
     
     all_objects = list(set(all_objects))
     for asset_id in tqdm.tqdm(all_objects):
-        if os.path.exists(f"all_obj_vis/{asset_id}.png"):
-            continue
+        #if os.path.exists(f"all_obj_vis/{asset_id}.png"):
+        #    continue
         with open(empty_house_json, "r") as f:
             house = json.load(f)
         house = utils.House()
@@ -107,7 +107,7 @@ if __name__=="__main__":
         cur_pos = obj["position"]
         target_pos = {
             "x": cur_pos["x"] + delta[0],
-            "y": cur_pos["y"] + delta[1],
+            "y": cur_pos["y"] + delta[1]+0.5,
             "z": cur_pos["z"] + delta[2],
         }
 

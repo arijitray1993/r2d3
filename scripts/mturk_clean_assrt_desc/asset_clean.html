@@ -1,0 +1,58 @@
+<!-- You must include this JavaScript file -->
+<script src="https://assets.crowd.aws/crowd-html-elements.js"></script>
+
+<!-- For the full list of available Crowd HTML Elements and their input/output documentation,
+      please refer to https://docs.aws.amazon.com/sagemaker/latest/dg/sms-ui-template-reference.html -->
+
+<!-- You must include crowd-form so that your task submits answers to MTurk -->
+<crowd-form answer-format="flatten-objects">
+
+    <p>
+      <strong>Instructions: </strong>
+      <ul>
+        <li>Please describe the asset image shown in very few words.</li>
+        <li>Use short succint phrases like "brown wooden table", or "blue leather couch" that describe the salient attributes (color, shape, material, etc) of the asset in a natural way.</li>
+        <li>Even though these are graphics renderings, do <b>not</b> use phrases like "a graphics rendering of", "3D rendered" etc. Just describe the asset by the attributes the best you can as if it were a real image.</li>
+        <li>To help you, we are including the type/name of the object asset (eg, couch, or countertop, or fridge, etc). Use this to guide you to write an accurate short phrase.</li>
+        <li>We are also including the GPT4 description. <b>The GPT4 description is noisy</b>. So, please use it cautiously when writing the phrase. </li>
+        <li>We will independently verify the asset descriptions. Descriptions that other workers think are incorrect will <b>not</b> be approved. So, please do the HITs diligently.</li>
+      </ul>
+    </p>
+    
+    <p><img src="${image_url1}" style="max-width: 100%; max-height: 250px" /></p>
+    <p><strong>Object Type: ${object_class1}</strong></p>
+    <p>GPT4 description: ${caption1}</p>
+    <p>GPT 4 description could be incorrect. Please verify the <b>color</b>, <b>shape</b>, <b>material</b> etc for accuracy and fix them when writing your description below.</p>
+
+    <crowd-input label="Your caption here..." name="caption1" required></crowd-input>
+
+    <hr>
+
+    <p><img src="${image_url2}" style="max-width: 100%; max-height: 250px" /></p>
+
+    <p><strong>Object Type: ${object_class2}</strong></p>
+    <p>GPT4 description: ${caption2}</p>
+    <p>GPT 4 description could be incorrect. Please verify the <b>color</b>, <b>shape</b>, <b>material</b> etc for accuracy and fix them when writing your description below.</p>
+
+    <crowd-input label="Your caption here..." name="caption2" required></crowd-input>
+    <hr>
+
+    <p><img src="${image_url3}" style="max-width: 100%; max-height: 250px" /></p>
+
+    <p><strong>Object Type: ${object_class3}</strong></p>
+    <p>GPT4 description: ${caption3}</p>
+    <p>GPT 4 description could be incorrect. Please verify the <b>color</b>, <b>shape</b>, <b>material</b> etc for accuracy and fix them when writing your description below.</p>
+
+    <crowd-input label="Your caption here..." name="caption3" required></crowd-input>
+
+    <hr>
+
+    <p><img src="${image_url4}" style="max-width: 100%; max-height: 250px" /></p>
+
+    <p><strong>Object Type: ${object_class4}</strong></p>
+    <p>GPT4 description: ${caption4}</p>
+    <p>GPT 4 description could be incorrect. Please verify the <b>color</b>, <b>shape</b>, <b>material</b> etc for accuracy and fix them when writing your description below.</p>
+
+    <crowd-input label="Your caption here..." name="caption4" required></crowd-input>
+
+</crowd-form>

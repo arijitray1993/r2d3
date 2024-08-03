@@ -12,6 +12,7 @@ from scipy.optimize import linear_sum_assignment
 import re
 import ast
 import torch.nn.functional as F
+import tqdm
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel
@@ -71,8 +72,10 @@ def compute_locationposeattr_error(pred_locations, gt_locations, max_dimension, 
     pose_matrix = np.zeros((k_gt, k_pred))
     for i in range(k_gt):
         for j in range(k_pred):
-            # pdb.set_trace()
-            cost_matrix[i, j] = np.linalg.norm(np.array(pred_locations[j][0]) - np.array(gt_locations[i][0]))
+            try:
+                cost_matrix[i, j] = np.linalg.norm(np.array(pred_locations[j][0]) - np.array(gt_locations[i][0]))
+            except:
+                pdb.set_trace()
             pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1][1])) # just rotation around y axis
     #print(cost_matrix)
     # then we use linear_sum_assignment to find the best matching between gt and pred
@@ -163,6 +166,30 @@ def compute_locationpose_error(pred_locations, gt_locations, max_dimension):
     #print(cluster_to_label_map)
 
     return mean_dist, np.mean(accuracy), np.mean(pose_accuracy), mean_pose_dist
+
+
+def get_obj_class_from_desc_pred(obj_desc, known_desc_to_class, attrmodel, attrtokenizer):
+    obj_desc = obj_desc.lower()
+    known_descs = list(known_desc_to_class.keys())
+    all_descs = [obj_desc,] + known_descs
+
+    # compute the highest similarity to known descriptions
+    batch_dict = attrtokenizer(all_descs, max_length=512, padding=True, truncation=True, return_tensors='pt')
+
+    batch_dict = {k: v.cuda() for k, v in batch_dict.items()}
+
+    outputs = attrmodel(**batch_dict)
+    embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
+
+    # normalize embeddings
+    embeddings = F.normalize(embeddings, p=2, dim=1)
+    scores = (embeddings[:1] @ embeddings[1:].T) * 100
+    
+    max_score_ind = scores.argmax().item()
+
+    best_known_desc= known_descs[max_score_ind]
+
+    return known_desc_to_class[best_known_desc]
 
 
 
@@ -955,6 +982,468 @@ class HouseSemanticSimilarity:
         # self.logger.log({"ObjectSelLocationAcc": objectsel_location_acc})
 
 
+
+class HouseNatLanguageSemSimSelected:
+    def __init__(self, args):
+            
+        self.house_jsons = []
+        self.gt_house_jsons = []
+        self.selected_objs = []
+        self.object_location_error = []
+        self.object_location_accuracy = []
+        self.object_pose_accuracy = []
+        self.object_pose_error = []
+        self.object_class_accuracy = []
+        self.object_finegrain_accuracy = []
+        self.object_count_error = []
+        self.object_count_acc = []
+        self.object_attr_similarity = []
+        self.json_accuracy = []
+        self.logger = args['logger']
+
+
+        self.assetdesc_to_obj = defaultdict(list)
+        asset_descs = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
+
+        for image_file, asset_name, object_class, caption in asset_descs:    
+            self.assetdesc_to_obj[caption].append((object_class, asset_name))
+
+        self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
+        self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
+
+    
+    def update(self, output, gt):
+        if "#room" in output:
+            room_response = output.split(": #room \n")[-1]
+        else:
+            room_response = output.split(": \n")[-1]
+
+        room_json_text = "\n".join(room_response.split("\n")[:-1])
+        room_json_text = room_json_text.split("###")[0]
+        room_json_text = room_json_text.replace("(", "[")
+        room_json_text = room_json_text.replace(")", "]")
+
+        try:
+            pred_house_dict = yaml.load(room_json_text, Loader=yaml.FullLoader)
+        except:
+            pred_house_dict = {}
+        if pred_house_dict is None:
+            print("none house dict")
+            print(room_json_text)
+        
+        self.house_jsons.append(pred_house_dict)
+        
+        # convert gt program text to gen config
+        gt_house_text = gt['text_labels'][0]
+        if "#room" in gt_house_text:
+            gt_house_text = gt_house_text.split(": #room \n")[-1]
+        else:
+            gt_house_text = gt_house_text.split(": \n")[-1]
+        gt_house_text = gt_house_text.replace("(", "[")
+        gt_house_text = gt_house_text.replace(")", "]")
+        # pdb.set_trace()
+
+        try:
+            gt_house_dict = yaml.load(gt_house_text, Loader=yaml.FullLoader)
+        except:
+            gt_house_dict = {}
+
+        if gt_house_dict is None:
+            print("none house dict GT!")
+            print(gt_house_text)
+        self.gt_house_jsons.append(gt_house_dict)
+        
+        # self.selected_objs.append(gt['objs_present'][0])
+        
+    
+    def compute(self):
+        for pred_house, gt_house in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons)):
+            if pred_house is None:
+                self.json_accuracy.append(0)
+                continue
+            if len(pred_house) == 0:
+                self.json_accuracy.append(0)
+                continue
+            
+            if pred_house is None or gt_house is None:
+                continue
+            if len(pred_house) == 0 or len(gt_house) == 0:
+                continue
+
+            # pdb.set_trace()
+            # check accuracy of room polygon i.e number of sides match
+            #pred_polygon = pred_house['polygon']
+            gt_polygon = gt_house['polygon']
+
+            max_coordinate = np.max(gt_polygon)
+            min_coordinate = np.min(gt_polygon)
+            max_dimension = max_coordinate - min_coordinate
+
+            # check accuracy of object classes
+            # make counts of objects and locations
+            gt_objs = defaultdict(list)
+            i=0
+            while(True):
+                if f'obj_{i}' not in gt_house and f'Object {i}' not in gt_house:
+                    break
+
+                obj_entry = gt_house[f'obj_{i}'] if f'obj_{i}' in gt_house else gt_house[f'Object {i}']
+                obj_desc = obj_entry.split("at location")[0].strip()
+                obj_loc = ast.literal_eval(obj_entry.split("at location")[-1].split("with rotation")[0].strip())
+                obj_rot = ast.literal_eval(obj_entry.split("with rotation")[-1].strip())
+                
+                
+                gt_objs[obj_desc].append((obj_loc, obj_rot, obj_desc))
+                i += 1
+            
+            pred_objs = defaultdict(list)
+            i=1
+            while(True):
+                if f'obj_{i}' not in pred_house and f'Object {i}' not in pred_house:
+                    break
+                
+                obj_entry = pred_house[f'obj_{i}'] if f'obj_{i}' in pred_house else pred_house[f'Object {i}']
+                obj_desc = obj_entry.split("at location")[0].strip()
+                try:
+                    obj_loc = ast.literal_eval(obj_entry.split("at location")[-1].split("with rotation")[0].strip())
+                    obj_rot = ast.literal_eval(obj_entry.split("with rotation")[-1].split(" degrees")[0].strip())
+                except:
+                    i += 1
+                    continue
+                
+                # check if obj_rot is list
+                if type(obj_rot) == list:
+                    pass
+                else:
+                    obj_rot = [0, obj_rot, 0]
+                pred_objs[obj_desc].append((obj_loc, obj_rot, obj_desc))
+                i += 1
+
+            if len(pred_objs) == 0:
+                self.json_accuracy.append(0)
+                continue
+            else:
+                self.json_accuracy.append(1)
+
+            pred_obj_classes = defaultdict(list)
+            for obj in pred_objs:
+                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                pred_obj_classes[obj_class].extend(pred_objs[obj])
+            
+            #if len(selected_objs)>0:
+            #    selected_obj_classes = [self.assetdesc_to_obj[obj][0][0] for obj in selected_objs]
+            #else:
+            #    selected_obj_classes = []
+            
+            pred_locations = {}
+            gt_locations = defaultdict(list)
+            for obj in gt_objs:
+                obj_class = self.assetdesc_to_obj[obj][0][0]
+                if obj_class in pred_obj_classes:
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(1)
+                    pred_locations[obj_class] = pred_obj_classes[obj_class]
+                    gt_locations[obj_class].extend(gt_objs[obj])
+                else:
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(0)
+            
+            # pdb.set_trace()
+            # compute hungarian matching of predicted object locations to gt object locations
+            for obj in gt_locations:
+                pred_loc = pred_locations[obj]
+                gt_loc = gt_locations[obj]
+
+                # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
+                # if obj in selected_obj_classes:
+                self.object_location_accuracy.append(accuracy)
+                self.object_location_error.append(mean_dist/max_dimension)
+                self.object_pose_accuracy.append(pose_accuracy)
+                self.object_pose_error.append(mean_pose_dist)
+                self.object_attr_similarity.append(attr_sim)
+            
+            for obj in gt_objs:
+                obj_class = self.assetdesc_to_obj[obj][0][0]
+                # if obj_class in selected_obj_classes:
+                if obj in pred_objs:
+                    self.object_finegrain_accuracy.append(1)
+                else:
+                    self.object_finegrain_accuracy.append(0)
+            
+            for obj in gt_objs:
+                obj_class = self.assetdesc_to_obj[obj][0][0]
+                # if obj_class in selected_obj_classes:
+                if obj in pred_objs:
+                    count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
+                    self.object_count_error.append(count_diff)
+                    if count_diff == 0:
+                        self.object_count_acc.append(1)
+                    else:
+                        self.object_count_acc.append(0)
+                else:
+                    self.object_count_error.append(len(gt_objs[obj]))
+                    self.object_count_acc.append(0)
+
+        # pdb.set_trace()
+        if len(self.object_location_accuracy) == 0:
+            return
+        # compute mean of all accuracies
+        object_class_acc = np.mean(self.object_class_accuracy)
+        object_location_err = np.mean(self.object_location_error)
+        object_location_acc = np.mean(self.object_location_accuracy)
+        object_pose_acc = np.mean(self.object_pose_accuracy)
+        object_pose_err = np.mean(self.object_pose_error)
+        object_finegrain_acc = np.mean(self.object_finegrain_accuracy)
+        object_count_err = np.mean(self.object_count_error)
+        object_count_acc = np.mean(self.object_count_acc)
+        object_attr_sim = np.mean(self.object_attr_similarity)
+        json_acc = np.mean(self.json_accuracy)
+
+        
+        self.logger.log({"SelObjectClassAcc": object_class_acc})
+        self.logger.log({"SelObjectLocationError": object_location_err})
+        self.logger.log({"SelObjectLocationAcc": object_location_acc})
+        self.logger.log({"SelObjectPoseAcc": object_pose_acc})
+        self.logger.log({"SelObjectPoseError": object_pose_err})
+        self.logger.log({"SelObjectFinegrainAcc": object_finegrain_acc})
+        self.logger.log({"SelObjectCountError": object_count_err})
+        self.logger.log({"SelObjectCountAcc": object_count_acc})
+        self.logger.log({"SelObjectAttrSim": object_attr_sim})
+        self.logger.log({"JSONAccuracy": json_acc})
+
+
+class HouseNatLanguageSemSimSelectedGPT4:
+    def __init__(self, args):
+            
+        self.house_jsons = []
+        self.gt_house_jsons = []
+        self.selected_objs = []
+        self.object_location_error = []
+        self.object_location_accuracy = []
+        self.object_pose_accuracy = []
+        self.object_pose_error = []
+        self.object_class_accuracy = []
+        self.object_finegrain_accuracy = []
+        self.object_count_error = []
+        self.object_count_acc = []
+        self.object_attr_similarity = []
+        self.json_accuracy = []
+        self.logger = args['logger']
+
+
+        self.assetdesc_to_obj = defaultdict(list)
+        asset_descs = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json"))
+
+        for asset_id in asset_descs:
+            for asst_entry in asset_descs[asset_id]:
+                im_f, obj_class, desc = asst_entry    
+                self.assetdesc_to_obj[desc].append((obj_class, asset_id))
+
+        self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
+        self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
+
+    
+    def update(self, output, gt):
+        if "#room" in output:
+            room_response = output.split(": #room \n")[-1]
+        else:
+            room_response = output.split(": \n")[-1]
+
+        room_json_text = "\n".join(room_response.split("\n")[:-1])
+        room_json_text = room_json_text.split("###")[0]
+        room_json_text = room_json_text.replace("(", "[")
+        room_json_text = room_json_text.replace(")", "]")
+
+        try:
+            pred_house_dict = yaml.load(room_json_text, Loader=yaml.FullLoader)
+            if isinstance(pred_house_dict, list):
+                # join them into one dict
+                pred_house_dict = {k: v for d in pred_house_dict for k, v in d.items()}
+        except:
+            pred_house_dict = {}
+        if pred_house_dict is None:
+            print("none house dict")
+            print(room_json_text)
+        
+        self.house_jsons.append(pred_house_dict)
+        
+        # convert gt program text to gen config
+        gt_house_text = gt['text_labels'][0]
+        if "#room" in gt_house_text:
+            gt_house_text = gt_house_text.split(": #room \n")[-1]
+        else:
+            gt_house_text = gt_house_text.split(": \n")[-1]
+        gt_house_text = gt_house_text.replace("(", "[")
+        gt_house_text = gt_house_text.replace(")", "]")
+        # pdb.set_trace()
+
+        try:
+            gt_house_dict = yaml.load(gt_house_text, Loader=yaml.FullLoader)
+        except:
+            gt_house_dict = {}
+
+        if gt_house_dict is None:
+            print("none house dict GT!")
+            print(gt_house_text)
+        self.gt_house_jsons.append(gt_house_dict)
+        
+        # self.selected_objs.append(gt['objs_present'][0])
+        
+    
+    def compute(self):
+        for pred_house, gt_house in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons)):
+            if pred_house is None:
+                self.json_accuracy.append(0)
+                continue
+            if len(pred_house) == 0:
+                self.json_accuracy.append(0)
+                continue
+            
+            if pred_house is None or gt_house is None:
+                continue
+            if len(pred_house) == 0 or len(gt_house) == 0:
+                continue
+
+            # pdb.set_trace()
+            # check accuracy of room polygon i.e number of sides match
+            #pred_polygon = pred_house['polygon']
+            gt_polygon = gt_house['polygon']
+
+            max_coordinate = np.max(gt_polygon)
+            min_coordinate = np.min(gt_polygon)
+            max_dimension = max_coordinate - min_coordinate
+
+            # check accuracy of object classes
+            # make counts of objects and locations
+            gt_objs = defaultdict(list)
+            i=0
+            while(True):
+                if f'obj_{i}' not in gt_house and f'Object {i}' not in gt_house:
+                    break
+
+                obj_entry = gt_house[f'obj_{i}'] if f'obj_{i}' in gt_house else gt_house[f'Object {i}']
+                obj_desc = obj_entry.split("at location")[0].strip()
+                obj_loc = ast.literal_eval(obj_entry.split("at location")[-1].split("with rotation")[0].strip())
+                obj_rot = ast.literal_eval(obj_entry.split("with rotation")[-1].strip())
+                
+                
+                gt_objs[obj_desc].append((obj_loc, [0, 0, 0], obj_desc))
+                i += 1
+            
+            pred_objs = defaultdict(list)
+            
+            for obj_desc in pred_house:
+                try:
+                    obj_loc = pred_house[obj_desc]
+                except:
+                    pdb.set_trace()
+
+                if isinstance(obj_loc, str):
+                    obj_loc = "["+obj_loc.split('[')[-1]
+                    obj_loc = ast.literal_eval(obj_loc)
+                    if not isinstance(obj_loc, list):
+                        continue
+                
+                pred_objs[obj_desc].append((obj_loc, [0, 0, 0], obj_desc))
+            
+            if len(pred_objs) == 0:
+                self.json_accuracy.append(0)
+                continue
+            else:
+                self.json_accuracy.append(1)
+
+            pred_obj_classes = defaultdict(list)
+            for obj in pred_objs:
+                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                pred_obj_classes[obj_class].extend(pred_objs[obj])
+            
+            #if len(selected_objs)>0:
+            #    selected_obj_classes = [self.assetdesc_to_obj[obj][0][0] for obj in selected_objs]
+            #else:
+            #    selected_obj_classes = []
+            
+            pred_locations = {}
+            gt_locations = defaultdict(list)
+            for obj in gt_objs:
+                try:
+                    obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                except:
+                    pdb.set_trace()
+                if obj_class in pred_obj_classes:
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(1)
+                    pred_locations[obj_class] = pred_obj_classes[obj_class]
+                    gt_locations[obj_class].extend(gt_objs[obj])
+                else:
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(0)
+            
+            # pdb.set_trace()
+            # compute hungarian matching of predicted object locations to gt object locations
+            for obj in gt_locations:
+                pred_loc = pred_locations[obj]
+                gt_loc = gt_locations[obj]
+
+                # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
+                # if obj in selected_obj_classes:
+                self.object_location_accuracy.append(accuracy)
+                self.object_location_error.append(mean_dist/max_dimension)
+                self.object_pose_accuracy.append(pose_accuracy)
+                self.object_pose_error.append(mean_pose_dist)
+                self.object_attr_similarity.append(attr_sim)
+            
+            for obj in gt_objs:
+                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                # if obj_class in selected_obj_classes:
+                if obj in pred_objs:
+                    self.object_finegrain_accuracy.append(1)
+                else:
+                    self.object_finegrain_accuracy.append(0)
+            
+            for obj in gt_objs:
+                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                # if obj_class in selected_obj_classes:
+                if obj in pred_objs:
+                    count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
+                    self.object_count_error.append(count_diff)
+                    if count_diff == 0:
+                        self.object_count_acc.append(1)
+                    else:
+                        self.object_count_acc.append(0)
+                else:
+                    self.object_count_error.append(len(gt_objs[obj]))
+                    self.object_count_acc.append(0)
+
+        # pdb.set_trace()
+        if len(self.object_location_accuracy) == 0:
+            return
+        # compute mean of all accuracies
+        object_class_acc = np.mean(self.object_class_accuracy)
+        object_location_err = np.mean(self.object_location_error)
+        object_location_acc = np.mean(self.object_location_accuracy)
+        object_pose_acc = np.mean(self.object_pose_accuracy)
+        object_pose_err = np.mean(self.object_pose_error)
+        object_finegrain_acc = np.mean(self.object_finegrain_accuracy)
+        object_count_err = np.mean(self.object_count_error)
+        object_count_acc = np.mean(self.object_count_acc)
+        object_attr_sim = np.mean(self.object_attr_similarity)
+        json_acc = np.mean(self.json_accuracy)
+
+        
+        self.logger.log({"SelObjectClassAcc": object_class_acc})
+        self.logger.log({"SelObjectLocationError": object_location_err})
+        self.logger.log({"SelObjectLocationAcc": object_location_acc})
+        self.logger.log({"SelObjectPoseAcc": object_pose_acc})
+        self.logger.log({"SelObjectPoseError": object_pose_err})
+        self.logger.log({"SelObjectFinegrainAcc": object_finegrain_acc})
+        self.logger.log({"SelObjectCountError": object_count_err})
+        self.logger.log({"SelObjectCountAcc": object_count_acc})
+        self.logger.log({"SelObjectAttrSim": object_attr_sim})
+        self.logger.log({"JSONAccuracy": json_acc})
+
+
 class AttributeObjectMetrics:
     def __init__(self, args):
         self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
@@ -1197,3 +1686,56 @@ class HouseJsonSimilarity:
             for corner_ind, image in enumerate(images):
                 image.save(os.path.join(self.exp_folder, f"vis/gt_images_{corner_ind}_{i}.png"))
 
+
+
+class QAAccuracy:
+
+    def __init__(self, args):
+        self.outputs = []
+        self.accs = []
+        self.logger = args['logger']
+        self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+    
+    def update(self, output, gt):
+        
+        data_name = gt['dataset'][0]
+        gt_question = gt['prompts']
+        gt_answers = gt['answers']
+        pred_answers = output
+
+        format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
+
+        # pdb.set_trace()
+        gt_answer = gt_answers[0].lower().strip()
+
+        gt_answer = gt_answer.replace("(", "")
+        gt_answer = gt_answer.replace(")", "")
+
+        gt_answer_words = gt_answer.split(" ")
+
+        correct = 0
+        for word in gt_answer_words:
+            if word in format_answer:
+                correct = 1
+
+        self.accs.append(correct)
+
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name))
+
+        
+    def compute(self):
+        
+        with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+            json.dump(self.outputs, f)
+
+        # acc by data name
+        data_accs = {}
+        for out_entry, acc in zip(self.outputs, self.accs):
+            data_name = out_entry[-1]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+            data_accs[data_name].append(acc)
+
+        for data_name in data_accs:
+            acc = np.mean(data_accs[data_name])
+            self.logger.log({f"{data_name}_acc": acc})
