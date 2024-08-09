@@ -76,7 +76,7 @@ def compute_metrics_from_json(json_file, logger):
     # initialize metrics
     args = {}
     args['logger'] = logger
-    accs = eval_funcs.HouseNatLanguageSemSimSelectedGPT(args)
+    accs = eval_funcs.HouseNatLanguageSemSimSelected(args)
 
     for entry in data:
 
@@ -97,14 +97,14 @@ def compute_metrics_from_json(json_file, logger):
 
 if __name__=="__main__":
     
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses_randomobjpoint.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_nomarksbaseline/output.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()
     run = wandb.init(project=exp_name)
     logger = run
     
-    compute_metrics_from_json_gpt_simpl(json_file, logger)
+    compute_metrics_from_json(json_file, logger)
 
     # compute_image_caption_metrics(json_file, logger, eval_caption_sim=False)
     

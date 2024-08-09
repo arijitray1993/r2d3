@@ -1,4 +1,4 @@
-exp_name: llava_instructtunedata_baseline
+exp_name: llava_instructtunedata_baseline_MLMBench
 device: 'gpu'
 num_workers: 2
 
@@ -16,7 +16,7 @@ load_checkpoint: False
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_instructtunedata_baseline/brisk-sun-1_50000
 
 eval_every: 5000
-num_eval_steps: 2000
+num_eval_steps: 5000
 no_shuffle: False
 
 freeze_vision: False
@@ -39,11 +39,11 @@ valtrain_dataset_args: {
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "AllVQA"
+val_dataset_choice: "AllMLMBench"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 400,
+  num_data_points: 3000,
 }
 
 val_collate_fn: "collate_fn" 

@@ -195,6 +195,7 @@ class GenericModule():
             print("Ground truth text: ")
             print(batch["text_labels"][0])
 
+            
             # pdb.set_trace()
             for entry in self.metrics:
                 metric_name = entry[0]

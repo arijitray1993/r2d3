@@ -13,6 +13,7 @@ import re
 import ast
 import torch.nn.functional as F
 import tqdm
+import random
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel
@@ -1003,11 +1004,14 @@ class HouseNatLanguageSemSimSelected:
 
 
         self.assetdesc_to_obj = defaultdict(list)
-        asset_descs = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/asset_descriptions_all.json"))
+        asset_descs = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json"))
+        
+        for asset in asset_descs:
+            entries = asset_descs[asset]
+            for im, obj, desc in entries:
+                self.assetdesc_to_obj[desc].append((obj, asset))
 
-        for image_file, asset_name, object_class, caption in asset_descs:    
-            self.assetdesc_to_obj[caption].append((object_class, asset_name))
-
+        
         self.attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
         self.attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
 
@@ -1712,7 +1716,14 @@ class QAAccuracy:
         gt_answer = gt_answer.replace(")", "")
 
         gt_answer_words = gt_answer.split(" ")
-
+        
+        if "BLINK" in data_name:
+            if "is closer" in gt_answer:
+                gt_answer_word = gt_answer_words[0]
+                gt_answer_words = [gt_answer_word]
+                # pdb.set_trace()
+                 
+            
         correct = 0
         for word in gt_answer_words:
             if word in format_answer:
@@ -1739,3 +1750,107 @@ class QAAccuracy:
         for data_name in data_accs:
             acc = np.mean(data_accs[data_name])
             self.logger.log({f"{data_name}_acc": acc})
+    
+class ReasoningAccuracy:
+
+    def __init__(self, args):
+        self.outputs = []
+        self.accs = []
+        self.random_accs = []
+        self.logger = args['logger']
+        self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+    
+    def update(self, output, gt):
+        
+        data_name = gt['dataset'][0]
+        gt_question = gt['prompts']
+        gt_answers = gt['answers']
+        answer_choices = gt['answer_choices'][0]
+        pred_answers = output
+
+        format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
+        gt_answer = gt_answers[0].lower().strip()
+
+        if "push" in gt_question or "pull" in gt_question:
+            if "it" in format_answer:
+                format_answer = format_answer.replace(" it ", " ")
+
+        correct = gt_answer in format_answer
+
+        incorrect_answers = [ans for ans in answer_choices if gt_answer not in ans.lower().strip()]
+
+        for inc_ans in incorrect_answers:
+            if inc_ans in format_answer:
+                correct = 0
+                break
+
+        if "obj_positions" in data_name:
+            depth = ""
+            left_right = ""
+
+            pred_depth = ""
+            pred_left_right = ""
+            if "behind" in gt_answer:
+                depth = "behind"
+            elif "in front" in gt_answer:
+                depth = "in front"
+            
+            if "left" in gt_answer:
+                left_right = "left"
+            elif "right" in gt_answer:
+                left_right = "right"
+            
+            if "behind" in format_answer and not "in front" in format_answer:
+                pred_depth = "behind"
+            
+            if "in front" in format_answer and not "behind" in format_answer:
+                pred_depth = "in front"
+            
+            if "left" in format_answer and not "right" in format_answer:
+                pred_left_right = "left"
+            
+            if "right" in format_answer and not "left" in format_answer:
+                pred_left_right = "right"
+
+            if depth == pred_depth and left_right == pred_left_right:
+                correct = 1
+            else:
+                correct = 0
+
+        random_correct = random.random()>(1/len(answer_choices))
+            
+        self.accs.append(correct)
+        self.random_accs.append(random_correct)
+
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name))
+
+        
+    def compute(self):
+        
+        with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+            json.dump(self.outputs, f)
+
+        # overall acc
+        acc = np.mean(self.accs)
+        self.logger.log({"overall_acc": acc})
+
+        random_acc = np.mean(self.random_accs)
+        self.logger.log({"random_acc": random_acc})
+
+        # acc by data name
+        data_accs = {}
+        data_random_acc = {}
+        for out_entry, acc, ran_acc in zip(self.outputs, self.accs, self.random_accs):
+            data_name = out_entry[-1]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+                data_random_acc[data_name] = []
+            data_accs[data_name].append(acc)
+            data_random_acc[data_name].append(ran_acc)
+
+        for data_name in data_accs:
+            acc = np.mean(data_accs[data_name])
+            self.logger.log({f"{data_name}_acc": acc})
+
+            ran_acc = np.mean(data_random_acc[data_name])
+            self.logger.log({f"{data_name}_random_acc": ran_acc})

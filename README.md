@@ -37,15 +37,27 @@ python compute_depth.py
 
 ## Data Format
 
+### Room images and graphics program data
 `final_data_neurips.json` contains the data needed to run your MLLM on the benchmark. 
 
 This JSON contains a list of room entries. Each room entry contains the following information:
 `[program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name]`
 
 Here is the description for each of the fields:
-- **`program_text`**: This is the graphics program for the room. You can also generate a lighter version of the graphics program without children objects if you do
+- **`program_text`**: This is the graphics program for the room. You can also generate a lighter version of the graphics program without children objects if you do `generate_program_from_roomjson(house_json, include_children=False)` by importing the function from `utils.ai2thor_utils`. 
 
-- **`house_json`**: This is the full raw JSON needed for the AI2THOR simulator to generate the room. The `program_text` above is a lighter versio of it to fit into context length for MLLMs. You can generate an even loighter version (without children objects) if you do:
+The program text is in the format:
+
+```
+polygon: [[1164, 0, 969], [1164, 0, 1747], [1553, 0, 1747], [1553, 0, 969]]
+floor_material: 'OrangeCabinet 1'
+wall_material: ['BrownMarbleFake 1', 'BrownMarbleFake 1', 'BrownMarbleFake 1', 'BrownMarbleFake 1']
+obj_0: ['TV_Stand_222_1', [1424, 20, 1718], [0, 180, 0]] # asset_id, 3D location, 3D rotation in degrees along each axis.
+obj_1: ['Sofa_204_1', [1424, 50, 1415], [0, 0, 0]]
+window_0: ['Window_Slider_36x36', [662, 150, 0], [[617, 104, 0], [707, 195, 0]], 2] # asset_id, 3D location, window rectangle shape, wall index.
+```
+
+- **`house_json`**: This is the full raw JSON needed for the AI2THOR simulator to generate the room. The `program_text` above is a lighter version of it to fit into context length for MLLMs. You can generate an even lighter version (without children objects) if you do:
 ```
 from utils.ai2thor_utils import generate_program_from_roomjson
 program_text = generate_program_from_roomjson(house_json, include_children=False)
@@ -64,6 +76,14 @@ program_text = generate_program_from_roomjson(house_json, include_children=False
 - **`color_to_objid`**: The mapping of the seg frame color to the object id. This is the object id present in the program_text.   
 
 - **`obj_id_to_name`**: The object class name for the object ids. 
+
+### Asset Descriptions
+
+Instead of the asset ids, we can also predict it in natural language like:
+```
+obj_0: Black modern TV stand at location [1424, 20, 1718] with rotation [0, 180, 0]
+```
+https://huggingface.co/datasets/array/r2d3_data/blob/main/asset_descriptions_all.json has these descrptions in the folloing format: a list with each entry as `[image_of_asset, asset_name, object_class, description caption]`.
 
 
 

@@ -2,6 +2,7 @@ from collections import defaultdict
 import json
 import prior
 from ai2thor.controller import Controller
+from ai2thor.platform import CloudRendering
 from PIL import Image
 import random
 from pprint import pprint
@@ -33,16 +34,16 @@ def add_red_dot_with_text(image, position, text):
 
     # Coordinates and radius of the dot
     x, y = position
-    radius = 10  # You can adjust the size of the dot
+    radius = 15  # You can adjust the size of the dot
 
     # Draw the red dot
     draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill='red', outline='red')
 
     # Load a font (optional, comment out if not needed)
-    try:
-        font = ImageFont.truetype("arial.ttf", 8)  # Adjust font and size as needed
-    except IOError:
-        font = ImageFont.load_default()
+    #try:
+    font = ImageFont.truetype("LiberationSans-Bold.ttf", 15)  # Adjust font and size as needed
+    #except IOError:
+    #    font = ImageFont.load_default()
 
     # Calculate text width and height to center it
     text_width = draw.textlength(text, font=font)
@@ -56,23 +57,35 @@ def add_red_dot_with_text(image, position, text):
 
 
 def get_current_state(controller):
-    nav_visible_objects = controller.step("GetVisibleObjects", maxDistance=6).metadata["actionReturn"]
-    nav_visible_obj_assets = [objid2assetid[obj] for obj in nav_visible_objects] # these are the visible object asset ids in the scene
-    nav_visible_obj_assets = [asset for asset in nav_visible_obj_assets if asset!=""]
+    nav_visible_objects = controller.step("GetVisibleObjects", maxDistance=5).metadata["actionReturn"]
+    nav_visible_objects = [obj for obj in nav_visible_objects if objid2assetid[obj]!=""] # these are the visible object asset ids in the scene
+    
+    bboxes = controller.last_event.instance_detections2D
+    vis_obj_to_size = {}
+    for obj_id in bboxes:
+        vis_obj_to_size[obj_id] = (bboxes[obj_id][2] - bboxes[obj_id][0])*(bboxes[obj_id][3] - bboxes[obj_id][1])
 
-    assetid2info = {}
+
+    objid2info = {}
     objdesc2cnt = defaultdict(int)
     for obj_entry in controller.last_event.metadata['objects']:
         obj_name = obj_entry['name']
         obj_type = obj_entry['objectType']
         asset_id = obj_entry['assetId']
+        obj_id = obj_entry['objectId']
         
         distance = obj_entry['distance']
         pos = np.array([obj_entry['position']['x'], obj_entry['position']['y'], obj_entry['position']['z']])
         rotation = obj_entry['rotation']
         desc = assetid2desc.get(asset_id, obj_type)
         moveable = obj_entry['moveable'] or obj_entry['pickupable']
-        asset_size = obj_entry['axisAlignedBoundingBox']['size']['x']*obj_entry['axisAlignedBoundingBox']['size']['y']*obj_entry['axisAlignedBoundingBox']['size']['z']
+        
+        asset_size_xy = vis_obj_to_size.get(obj_entry['objectId'], 0)
+        asset_pos_box = bboxes.get(obj_entry['objectId'], None)
+        if asset_pos_box is not None:
+            asset_pos_xy = [(asset_pos_box[0]+asset_pos_box[2])/2, (asset_pos_box[1]+asset_pos_box[3])/2]
+        else:
+            asset_pos_xy = None
 
         parent = obj_entry.get('parentReceptacles')
         if parent is not None:
@@ -84,17 +97,17 @@ def get_current_state(controller):
                     parent = objid2assetid[parent]
         
         is_receptacle = obj_entry['receptacle']
-        assetid2info[asset_id] = (obj_name, obj_type, distance, pos, rotation, desc, moveable, parent, asset_size, is_receptacle)
-        objdesc2cnt[desc] += 1
+        objid2info[obj_id] = (obj_name, obj_type, distance, pos, rotation, desc, moveable, parent, asset_size_xy, is_receptacle, asset_pos_xy)
+        objdesc2cnt[obj_type] += 1
 
+    
     moveable_visible_objs = []
     for objid in nav_visible_objects:
-        assetid = objid2assetid[objid]
-        if assetid in assetid2info:
-            if assetid2info[assetid][6] and assetid2info[assetid][8]>0.003:
-                moveable_visible_objs.append(objid)
+        if objid2info[objid][6] and objid2info[objid][8]>1600:
+            moveable_visible_objs.append(objid)
 
-    return nav_visible_obj_assets, assetid2info, objdesc2cnt, moveable_visible_objs
+    # pdb.set_trace()
+    return nav_visible_objects, objid2info, objdesc2cnt, moveable_visible_objs
 
 
 if __name__ == "__main__":
@@ -102,355 +115,342 @@ if __name__ == "__main__":
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
     qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation/'
     qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
+    vis = True
+    stats = True
+    generate = True
 
-    if not os.path.exists(qa_im_path):
-        os.makedirs(qa_im_path)
+    if generate:
+        if not os.path.exists(qa_im_path):
+            os.makedirs(qa_im_path)
 
-    assetid2desc = {}
-    for asset in asset_id_desc:
-        entries = asset_id_desc[asset]
-        captions = []
-        for im, obj, desc in entries:
-            captions.append(desc)
-        assetid2desc[asset] = random.choice(captions)
-
- 
-
-    dataset = prior.load_dataset("procthor-10k")
+        assetid2desc = {}
+        for asset in asset_id_desc:
+            entries = asset_id_desc[asset]
+            captions = []
+            for im, obj, desc in entries:
+                desc = desc.strip().lower().replace(".", "")
+                captions.append(desc)
+            assetid2desc[asset] = random.choice(captions)
 
     
-    all_im_qas = []
-    for house_ind, house in enumerate(dataset["train"]):
-        house_json = house
-        try:
-            controller = Controller(scene=house, width=300, height=300, quality="Low") # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
-        except:
-            print("Cannot render environment, continuing")
-            # pdb.set_trace()
-            continue
-        
-        # get camera position with max objects visible
 
-        try:
-            event = controller.step(action="GetReachablePositions")
-        except:
-            print("Cannot get reachable positions, continuing")
-            controller.stop()
-            continue
-        reachable_positions = event.metadata["actionReturn"]
+        dataset = prior.load_dataset("procthor-10k")
+
+        # all_im_qas = []
         
-        random_positions = []
-        for cam_pos in random.sample(reachable_positions, 10):
-            
-            cam_rot = random.choice(range(360))
-            try:
-                controller.step(action="Teleport", position=cam_pos, rotation=cam_rot)
-            except:
-                print("Cannot teleport, continuing")
+        all_im_qas = json.load(open(qa_json_path, "r"))
+
+        for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
+            if house_ind < 1129:
                 continue
+            house_json = house
 
-            nav_visible_objects = controller.step(
-                "GetVisibleObjects",
-                maxDistance=6,
-            ).metadata["actionReturn"]
-
-            random_positions.append((cam_pos, cam_rot, len(nav_visible_objects)))
-        
-        if len(random_positions)==0:
-            print("No objects visible, continuing")
-            controller.stop()
-            continue
-
-        random_positions = sorted(random_positions, key=lambda x: x[2], reverse=True)
-        
-        controller.stop()
-
-        if not os.path.exists(qa_im_path + f"{house_ind}"):
-            os.makedirs(qa_im_path + f"{house_ind}")
-
-        sample_count = 0
-        for cam_pos, cam_rot, _ in random_positions[:1]:
-            qa_pair_choices = []
-
-            controller = Controller(scene=house_json, width=800, height=800, quality="Ultra")
             try:
-                controller.step(action="Teleport", position=cam_pos, rotation=cam_rot)
+                controller = Controller(scene=house, width=300, height=300, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
             except:
-                print("Cannot teleport, continuing")
+                print("Cannot render environment, continuing")
+                # pdb.set_trace()
+                continue
+            
+            # get camera position with max objects visible
+
+            try:
+                event = controller.step(action="GetReachablePositions")
+            except:
+                print("Cannot get reachable positions, continuing")
+                controller.stop()
+                continue
+            reachable_positions = event.metadata["actionReturn"]
+
+            if len(reachable_positions) < 10:
+                print("Not enough reachable positions, continuing")
+                controller.stop()
+                continue
+            
+            random_positions = []
+            for cam_pos in random.sample(reachable_positions, 10):
+                
+                cam_rot = random.choice(range(360))
+                try:
+                    controller.step(action="Teleport", position=cam_pos, rotation=cam_rot)
+                except:
+                    print("Cannot teleport, continuing")
+                    continue
+
+                nav_visible_objects = controller.step(
+                    "GetVisibleObjects",
+                    maxDistance=5,
+                ).metadata["actionReturn"]
+
+                random_positions.append((cam_pos, cam_rot, len(nav_visible_objects)))
+            
+            if len(random_positions)==0:
+                print("No objects visible, continuing")
                 controller.stop()
                 continue
 
-            objid2assetid = {}
-            for obj in controller.last_event.metadata['objects']:
-                objid2assetid[obj['objectId']] = obj['assetId']
+            random_positions = sorted(random_positions, key=lambda x: x[2], reverse=True)
+            
+            controller.stop()
 
-            # get visible objects
-            nav_visible_obj_assets, assetid2info, objdesc2cnt, moveable_visible_objs = get_current_state(controller)
+            if not os.path.exists(qa_im_path + f"{house_ind}"):
+                os.makedirs(qa_im_path + f"{house_ind}")
 
-            img_view = Image.fromarray(controller.last_event.frame)
+            sample_count = 0
+            for cam_pos, cam_rot, _ in random_positions[:1]:
+                qa_pair_choices = []
+                try:
+                    controller = Controller(scene=house_json, width=1024, height=1024, quality="Ultra", platform=CloudRendering,  renderInstanceSegmentation=True)
+                except:
+                    print("Cannot render environment, continuing")
+                    continue
+                try:
+                    controller.step(action="Teleport", position=cam_pos, rotation=cam_rot)
+                except:
+                    print("Cannot teleport, continuing")
+                    controller.stop()
+                    continue
 
-            new_path_init = qa_im_path + f"{house_ind}/{sample_count}_0.jpg"
-            img_view.save(new_path_init)
+                objid2assetid = {}
+                for obj in controller.last_event.metadata['objects']:
+                    objid2assetid[obj['objectId']] = obj['assetId']
 
-            choices = ["nav_only",]
-            qa_choice = random.choice(choices)
-            if qa_choice == "nav_only":
+                # get visible objects
+                nav_visible_objects, objid2info, objdesc2cnt, moveable_visible_objs = get_current_state(controller)
+
+                img_view = Image.fromarray(controller.last_event.frame)
+
+                new_path_init = qa_im_path + f"{house_ind}/{sample_count}_0.jpg"
+                img_view.save(new_path_init)
+
+                
                 actions = []
                 wrong_action_seq = []
                 image_seq = [new_path_init,]
                 
                 step_i = 1
-                while step_i < random.choice(range(3, 10)):
-                    if random.random() < 0.66:
-                        # choose a random angle and direction to move.
-                        angle = random.choice(range(20, 60, 10))
-                        direction = random.choice(["RotateLeft", "RotateRight"])
-                        text_direction = "left" if direction=="RotateLeft" else "right"
-                        wrong_text_direction = "right" if direction=="RotateLeft" else "left"
-                        # pdb.set_trace()
-                        try:
-                            state = controller.step(action=direction, degrees=angle)
-                        except:
-                            step_i += 1
-                            continue
-                        if state.metadata["lastActionSuccess"]:
-                            actions.append(f"rotated {text_direction} by {int(angle)} degrees")
-                            wrong_action_seq.append(
-                                random.choice([f"rotated {wrong_text_direction} by {int(angle)} degrees", "moved forward by 0.25 meters", "moved backward by 0.25 meters"])
-                            )
-                            img_view = Image.fromarray(controller.last_event.frame)
-                            step_img_path = qa_im_path + f"{house_ind}/{sample_count}_{step_i}.jpg"
-                            img_view.save(step_img_path)
-                            image_seq.append(step_img_path)
+                while step_i < random.choice(range(2, 4)):
+                    
+                    # choose a random angle and direction to rotate.
+                    angle = random.choice(range(20, 60, 10))
+                    direction = random.choice(["RotateLeft", "RotateRight"])
+                    text_direction = "left" if direction=="RotateLeft" else "right"
+                    wrong_text_direction = "right" if direction=="RotateLeft" else "left"
+                    # pdb.set_trace()
+                    try:
+                        state = controller.step(action=direction, degrees=angle)
+                        state = controller.step(action="MoveAhead", moveMagnitude=0.25)
+                    except:
+                        # step_i += 1
+                        continue
 
-                        else:
-                            question = f"Can I rotate {text_direction} by {int(angle)} degrees at this position?"
-                            explantion = state.metadata["errorMessage"]
-                            blocking_obj_name = state.metadata["errorMessage"].split(" is blocking")[0].strip()
-                            blocking_obj_name = assetid2info[objid2assetid[blocking_obj_name]][5]
-                            explantion = f"{blocking_obj_name} is blocking the rotation."
-                            answer_choices = ["No because: " + explantion, "yes"]
-                            qa_pair_choices.append((question, image_seq, answer_choices))
+                    if state.metadata["lastActionSuccess"]:
+                        actions.append(f"rotated {text_direction}, moved forward")
+                        wrong_action_seq.append(
+                            random.choice([f"rotated {wrong_text_direction}, moved forward",])
+                        )
+                        img_view = Image.fromarray(controller.last_event.frame)
+                        step_img_path = qa_im_path + f"{house_ind}/{sample_count}_{step_i}.jpg"
+                        img_view.save(step_img_path)
+                        image_seq.append(step_img_path)
+
                     else:
+                        question = f"Can I rotate {text_direction} and move forward at this position?"
+                        explantion = state.metadata["errorMessage"]
+                        blocking_obj_name = state.metadata["errorMessage"].split(" is blocking")[0].strip()
                         try:
-                            state = controller.step(action="MoveAhead", moveMagnitude=0.25)
+                            blocking_obj_name = objid2info[blocking_obj_name][5]
                         except:
-                            step_i += 1
-                            continue
-                        if state.metadata["lastActionSuccess"]:
-                            actions.append("moved forward by 0.25 meters")
-                            wrong_action_seq.append(random.choice(["moved backward by 0.25 meters", f"rotated left by {random.choice(range(50, 160, 10))} degrees", f"rotated right by {random.choice(range(50, 160, 10))} degrees"]))
-                            img_view = Image.fromarray(controller.last_event.frame)
-                            step_img_path = qa_im_path + f"{house_ind}/{sample_count}_{step_i}.jpg"
-                            img_view.save(step_img_path)
-                            image_seq.append(step_img_path)
-                        else:
-                            question = f"Can I move forward by 0.25 meters at this position?"
-                            explantion = state.metadata["errorMessage"]
-                            blocking_obj_name = state.metadata["errorMessage"].split(" is blocking")[0].strip()
-                            blocking_obj_name = assetid2info[objid2assetid[blocking_obj_name]][5]
-                            explantion = f"{blocking_obj_name} is blocking the movement."
-                            answer_choices = ["No because: " + explantion, "yes"]
-                            qa_pair_choices.append((question, image_seq, answer_choices))
+                            blocking_obj_name = "something"
+                        explantion = f"{blocking_obj_name} is blocking the movement."
+                        answer_choices = ["No because " + explantion, "yes"]
+                        qa_pair_choices.append((question, [image_seq[-1],], answer_choices))
                     
                     step_i += 1
                 
 
                 action = " and then ".join(actions)
                 wrong_action = " and then ".join(wrong_action_seq)
-                
-                # questions about opbject movement
+
+                if len(actions) < 1:
+                    controller.stop()
+                    continue
+
+                # swap one of the correct actions for a wrong action
+                swap_i = random.choice(range(len(actions)))
+                hard_wrong_action_seq = copy.deepcopy(actions)
+                hard_wrong_action_seq[swap_i] = wrong_action_seq[swap_i]
+                hard_wrong_action = " and then ".join(hard_wrong_action_seq)
+
+                # questions about object movement
                 question = "Did any of the objects in the initial frame that you can still see in the subsequent frames move from their original positions?"
                 answer_choices = ["No", "Yes"] # first choice is always correct, randomize later in dataloader
                 qa_pair_choices.append((question, image_seq, answer_choices))
                 
                 # question about the actions taken in the sequence of images
                 question = "How did I likely move for the given image frames in order?"
-                answer_choices = [action, wrong_action]
+                answer_choices = [action, wrong_action, hard_wrong_action]
                 # pdb.set_trace()
                 qa_pair_choices.append((question, image_seq, answer_choices))
 
-                # check objects we moved closer to. 
+                # check objects we moved closer or further to. 
                 obj_distance_changes = []
                 move_closer_assets = []
                 move_farther_assets = []
-                for obj_entry in controller.last_event.metadata['objects']:
-                    asset_id = obj_entry['assetId']
-                    asset_size = obj_entry['axisAlignedBoundingBox']['size']['x']*obj_entry['axisAlignedBoundingBox']['size']['y']*obj_entry['axisAlignedBoundingBox']['size']['z']
+                nav_visible_objects_upd, objid2info_upd, objdesc2cnt_upd, moveable_visible_objs_upd = get_current_state(controller)
 
-                    if asset_id in nav_visible_obj_assets and asset_size>0.006 and objdesc2cnt[assetid2info[asset_id][5]]==1:
-                        distance = obj_entry['distance']
-                        og_distance = assetid2info[asset_id][2]  
-                        obj_distance_changes.append((asset_id, distance, og_distance))
+                image_marked = Image.open(image_seq[0]).convert("RGB")
+                for asst_cnt, asset_id in enumerate(nav_visible_objects_upd):
+                    asset_size = objid2info[asset_id][8]
+                    asset_pos = objid2info[asset_id][10]
+                    asset_count = objdesc2cnt[objid2info[asset_id][1]]
+
+                    #check if object too close to the edge:
+                    if asset_pos is not None:
+                        close_to_edge = asset_pos[0] < 10 or asset_pos[0] > 1000 or asset_pos[1] < 10 or asset_pos[1] > 1000
+                    else:
+                        close_to_edge = True
+
+                    if asset_id in nav_visible_objects and asset_size>1600 and not close_to_edge:
+                        distance = objid2info_upd[asset_id][2]
+                        og_distance = objid2info[asset_id][2]  
+
+                        obj_distance_changes.append((asset_id, distance, og_distance, asst_cnt))
+                        # if asset_count > 1:
+                        image_marked = add_red_dot_with_text(image_marked, (asset_pos[0], asset_pos[1]), str(asst_cnt))
+
                         if distance < og_distance:
-                            move_closer_assets.append(asset_id)
+                            move_closer_assets.append((asset_id, asst_cnt))
                         else:
-                            move_farther_assets.append(asset_id)
+                            move_farther_assets.append((asset_id, asst_cnt))
                 
-                for asset_id, distance, og_distance in obj_distance_changes:
+                new_path_marked = qa_im_path + f"{house_ind}/{sample_count}_marked.jpg"
+                image_marked.save(new_path_marked)
+
+                
+                for asset_id, distance, og_distance, asset_cnt in random.sample(obj_distance_changes, min(3, len(obj_distance_changes))):
                     if distance < og_distance:
                         if random.random() < 0.5:
-                            question = f"If I {action}, would {assetid2info[asset_id][5]} move closer to the camera?"
+                            question = f"If I {action}, would {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image) move closer to the camera?"
                             answer_choices = ["yes", "no"]
-                            image_order = image_seq[:1]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
                         else:
-                            question = f"If I {action}, would {assetid2info[asset_id][5]} move further from the camera?"    
+                            question = f"If I {action}, would {objid2info[asset_id][5]} (marked {asset_cnt} in the image) move further from the camera?"    
                             answer_choices = ["no", "yes"]
-                            image_order = image_seq[:1]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices)) 
 
                         if len(move_farther_assets) > 0:
                             question = f"Which of the following objects will move closer to the camera if I {action}?"
-                            answer_choices = [assetid2info[asset_id][5]] + [assetid2info[asset_id][5] for asset_id in move_farther_assets]
-                            image_order = image_seq[:1]
+                            answer_choices = [objid2info[asset_id][5] + f"(near the mark {asset_cnt} in the image)"] + [objid2info[asst_id][5] + f"(near the mark {asst_cnt} in the image)" for asst_id, asst_cnt in move_farther_assets]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
                     elif distance > og_distance:
                         if random.random() < 0.5:
-                            question = f"if I {action}, would {assetid2info[asset_id][5]} move closer to the camera?"
+                            question = f"if I {action}, would {objid2info[asset_id][5]} (marked {asset_cnt} in the image) move closer to the camera?"
                             answer_choices = ["no", "yes"]
-                            image_order = image_seq[:1]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
                         else:
-                            question = f"If I {action}, would {assetid2info[asset_id][5]} move further from the camera?"
+                            question = f"If I {action}, would {objid2info[asset_id][5]} (marked {asset_cnt} in the image) move further from the camera?"
                             answer_choices = ["yes", "no"]
-                            image_order = image_seq[:1]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
 
                         if len(move_closer_assets) > 0:
                             question = f"Which of the following objects will move further from the camera if I {action}?"
-                            answer_choices = [assetid2info[asset_id][5]] + [assetid2info[asset_id][5] for asset_id in move_closer_assets]
-                            image_order = image_seq[:1]
+                            answer_choices = [objid2info[asset_id][5] + f"(marked {asset_cnt} in the image)"] + [objid2info[asst_id][5] + f"(near the mark {asst_cnt} in the image)"  for asst_id, asst_cnt in random.sample(move_closer_assets, 1)]
+                            image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
                     else:
-                        question = f"If I {action}, would {assetid2info[asset_id][5]} move closer to the camera?"
+                        question = f"If I {action}, would {objid2info[asset_id][5]} (marked {asset_cnt} in the image) move closer to the camera?"
                         answer_choices = ["no, it would stay the same", "yes"]
-                        image_order = image_seq[:1]
+                        image_order = [new_path_marked,]
                         qa_pair_choices.append((question, image_order, answer_choices))
+
+                if len(obj_distance_changes) > 3:
+                    for random_i in range(3):
+                        obj_pair = random.sample(obj_distance_changes, 2)
+                        asset_id1, distance1, og_distance1, asset_cnt1 = obj_pair[0]
+                        asset_id2, distance2, og_distance2, asset_cnt2 = obj_pair[1]
+                        delta = 0.4
+                        # check which one moved more closer
+                        if og_distance1 - distance1 > (og_distance2 - distance2) + delta:
+                            question = f"Would I be moving more in the direction of {objid2info[asset_id1][5]} (near the mark {asset_cnt1} in the image) than {objid2info[asset_id2][5]} (mark {asset_cnt2} in the image) if I {action}?"
+                            answer_choices = ["yes", "no"]
+                            image_order = [new_path_marked,]
+                            qa_pair_choices.append((question, image_order, answer_choices))
+                        elif (og_distance1 - distance1) + delta < og_distance2 - distance2:
+                            question = f"Would I be moving more in the direction of {objid2info[asset_id1][5]} (near the mark {asset_cnt1} in the image) than {objid2info[asset_id2][5]} (mark {asset_cnt2} in the image) if I {action}?"
+                            answer_choices = ["no", "yes"]
+                            image_order = [new_path_marked,]
+                            qa_pair_choices.append((question, image_order, answer_choices))
 
                 # pdb.set_trace()
-
-            elif qa_choice == "obj_only":
-                # choose a random object and move it to a random position on a receptacle
-                obj_choices = random.sample(moveable_visible_objs, 2)
-                    
-                #receptacle_choice = random.choice(receptacle_objects)
-                #spawn_coordinates = controller.step(action="GetSpawnCoordinatesAboveReceptacle", objectId=receptacle_choice, anywhere=True).metadata["actionReturn"]
-                #pdb.set_trace()
-                #spawn_choice = random.choice(spawn_coordinates)
-                
-                #move obj1 closer to obj2
-                obj1 = obj_choices[0]
-                obj2 = obj_choices[1]
-
-                obj1_pos = assetid2info[objid2assetid[obj1]][3]
-                obj2_pos = assetid2info[objid2assetid[obj2]][3]
-
-                spawn_choice = obj1_pos + 0.5*(obj2_pos - obj1_pos)
-
-                spawn_choice = {"x": spawn_choice[0], "y": spawn_choice[1], "z": spawn_choice[2]}
-                
-                event = controller.step(action="PlaceObjectAtPoint", objectId=obj1, position=spawn_choice)
-
-                if event.metadata["lastActionSuccess"]:
-                    img_view = Image.fromarray(controller.last_event.frame)
-                    new_path_final = qa_im_path + f"{house_ind}/{sample_count}_final.jpg"
-                    img_view.save(new_path_final)
-
-                    question = "Did any of the objects in the initial frame that you can still see in the final frame move from their original positions?"
-                    answer_choices = ["Yes", "No"] # first choice is always correct, randomize later in dataloader
-                    image_order = (new_path_init, new_path_final)
-                    qa_pair_choices.append((question, image_order, answer_choices))
-
-                    question = f"Which object moved in the two frames?"
-                    answer_choices = [
-                        assetid2info[objid2assetid[obj1]][5],
-                        assetid2info[objid2assetid[obj2]][5],
-                        "None of the objects"
-                    ]
-                    image_order = (new_path_init, new_path_final)
-                    qa_pair_choices.append((question, image_order, answer_choices))
-
-                    if random.random() < 0.5:
-                        question = f"Did {assetid2info[objid2assetid[obj1]][5]} move closer to {assetid2info[objid2assetid[obj2]][5]} from the first frame to the second frame?"
-                        answer_choices = ["yes", "no"]
-                        image_order = (new_path_init, new_path_final)
-                        qa_pair_choices.append((question, image_order, answer_choices))
-                    else:
-                        question = f"Did {assetid2info[objid2assetid[obj1]][5]} move further from {assetid2info[objid2assetid[obj2]][5]} from the first frame to the second frame?"
-                        answer_choices = ["yes", "no"]
-                        image_order = (new_path_final, new_path_init)
-                        qa_pair_choices.append((question, image_order, answer_choices))
-
-                    spawn_pos = np.array([spawn_choice["x"], spawn_choice["y"], spawn_choice["z"]])
-                    cam_pos_arr = np.array([cam_pos["x"], cam_pos["y"], cam_pos["z"]])
-                    # pdb.set_trace()
-                    distance_cam_updated = np.linalg.norm(spawn_pos - cam_pos_arr)
-                    
-                    distance_cam_initial = np.linalg.norm(np.array(obj1_pos) - np.array(cam_pos_arr))
-
-                    question = f"If I move {assetid2info[objid2assetid[obj1]][5]} closer to {assetid2info[objid2assetid[obj2]][5]}, will it be closer to the camera than it was in the initial frame?"
-                    if distance_cam_updated < distance_cam_initial:
-                        answer_choices = ["yes", "no"]
-                    else:
-                        answer_choices = ["no", "yes"]
-                    image_order = (new_path_init,)
-                    qa_pair_choices.append((question, image_order, answer_choices))
-            elif qa_choice == "obj_movement":
-                
-                pass        
-                #else:
-                #    question = f"Can we place {assetid2info[objid2assetid[obj1]][5]} midway to {assetid2info[objid2assetid[obj2]][5]}?"
-                #    explantion = event.metadata["errorMessage"]
-                #    answer_choices = ["yes", "No because: " + explantion]
-
-                #    image_order = (new_path_init, "")
-                #    qa_pair_choices.append((question, image_order, answer_choices))
-
-
-
-            # pdb.set_trace()
-            if len(qa_pair_choices) > 0:
-                all_im_qas.append((house_ind, cam_pos, cam_rot, qa_pair_choices))
-            sample_count += 1
-            controller.stop()
-        
-        
-        json.dump(all_im_qas, open(qa_json_path, "w"))
-
-        if house_ind > 3:
-            break
-
-    
-    # view in html
-    html_str = f"<html><head></head><body>"
-    public_im_folder = "/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/"
-    for house_ind, _, _, qa_pairs in all_im_qas:
-        if not os.path.exists(public_im_folder + f"{house_ind}"):
-            os.makedirs(public_im_folder + f"{house_ind}")
+                if len(qa_pair_choices) > 0:
+                    all_im_qas.append((house_ind, cam_pos, cam_rot, qa_pair_choices))
+                sample_count += 1
+                controller.stop()
             
-        for sample_count, qa_pair in enumerate(qa_pairs):
-            question, image_order, answer_choices = qa_pair
-            html_str += f"<p>{question}</p>"
-            for im in image_order:
-                if im == "":
-                    continue
-                public_path_im = public_im_folder + "/".join(im.split("/")[-2:])
-                shutil.copyfile(im, public_path_im)
-                html_im_url = "https://cs-people.bu.edu/array/"+public_path_im.split("/net/cs-nfs/home/grad2/array/public_html/")[-1]
-                html_str += f"<img src='{html_im_url}' style='width: 300px; height: 300px;'>"
-            html_str += "<p>"
-            for ans in answer_choices:
-                html_str += f"<p>{ans}</p>"
-            html_str += "<p>"
-            html_str += "<hr>"
-    html_str += "</body></html>"
-    with open("multi_im_qa_navigation.html", "w") as f:
-        f.write(html_str)
+            if house_ind % 100 == 0:
+                json.dump(all_im_qas, open(qa_json_path, "w"))
+            
+    if vis:
+        all_im_qas = json.load(open(qa_json_path, "r"))
+        print("Num samples: ", len(all_im_qas))
+        # view in html
+        html_str = f"<html><head></head><body>"
+        public_im_folder = "/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/"
+        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 50):
+            if not os.path.exists(public_im_folder + f"{house_ind}"):
+                os.makedirs(public_im_folder + f"{house_ind}")
+                
+            for sample_count, qa_pair in enumerate(qa_pairs):
+                question, image_order, answer_choices = qa_pair
+                html_str += f"<p>{question}</p>"
+                for im in image_order:
+                    if im == "":
+                        continue
+                    public_path_im = public_im_folder + "/".join(im.split("/")[-2:])
+                    shutil.copyfile(im, public_path_im)
+                    html_im_url = "https://cs-people.bu.edu/array/"+public_path_im.split("/net/cs-nfs/home/grad2/array/public_html/")[-1]
+                    html_str += f"<img src='{html_im_url}' style='width: 300px; height: 300px;'>"
+                html_str += "<p>"
+                for ans in answer_choices:
+                    html_str += f"<p>{ans}</p>"
+                html_str += "<p>"
+                html_str += "<hr>"
+        html_str += "</body></html>"
+        with open("/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/multi_im_qa_navigation.html", "w") as f:
+            f.write(html_str)
 
         
 
-
+    if stats:
+        all_im_qas = json.load(open(qa_json_path, "r"))
         
-         
-       
+        print("Num samples: ", len(all_im_qas))
+
+        avg_qa_pairs = []
+        avg_choice_len = []
+        avg_answer_len = []
+        avg_im_len = []
+        avg_action_len = []
+        
+        for house_ind, _, _, qa_pairs in all_im_qas:
+            num_qa = len(qa_pairs)
+            avg_qa_pairs.append(num_qa)
+
+            for ques, im_order, answer_choices in qa_pairs:
+                avg_choice_len.append(len(answer_choices))
+                avg_answer_len.append(len(answer_choices[0].split(" ")))
+                avg_im_len.append(len(im_order))
+                if len(im_order) > 1:
+                    avg_action_len.append(len(im_order))
+                
+        print("Average number of qa pairs: ", sum(avg_qa_pairs)/len(avg_qa_pairs))
+        print("Average number of choices: ", sum(avg_choice_len)/len(avg_choice_len))
+        print("Average number of words in answers: ", sum(avg_answer_len)/len(avg_answer_len))
+        print("Average number of images per qa pair: ", sum(avg_im_len)/len(avg_im_len))
+        print("Average number of action sequences: ", sum(avg_action_len)/len(avg_action_len))

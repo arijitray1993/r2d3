@@ -1,6 +1,6 @@
-exp_name: llava_instructtunedata_baseline
+exp_name: llava_instructtunedata_baseline_VQABench
 device: 'gpu'
-num_workers: 2
+num_workers: 4
 
 
 ### loading checkpoints, eval, train options
@@ -16,7 +16,7 @@ load_checkpoint: False
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_instructtunedata_baseline/brisk-sun-1_50000
 
 eval_every: 5000
-num_eval_steps: 2000
+num_eval_steps: 5000
 no_shuffle: False
 
 freeze_vision: False

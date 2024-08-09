@@ -15,7 +15,7 @@ load_checkpoint: False
 lora_model_path: False #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_randompoint/peach-violet-11_115000
 
 eval_every: 5000
-num_eval_steps: 800
+num_eval_steps: 2000
 no_shuffle: False
 
 freeze_vision: False
@@ -26,7 +26,7 @@ val_dataset_choice: "AllVQA"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 200,
+  num_data_points: 400,
 }
 
 val_collate_fn: "collate_fn" 

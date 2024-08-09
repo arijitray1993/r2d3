@@ -381,6 +381,69 @@ class MixLLavaProcthor(Dataset):
 
         return return_dict
         
+class MixLLaVAProcthorReasoning(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.procthor_data = ProcTHOR_reasoning(args, tokenizer, image_processor)
+        self.llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
+        self.proc_len = len(self.procthor_data)
+        self.llava_len = len(self.llava_data)
+
+        print("combined data ...")
+
+        print("Total number of data points: ", self.proc_len + self.llava_len)
+    
+    def __getitem__(self, idx):
+        if random.random() < 0.7:
+            return self.procthor_data[idx%self.proc_len]
+        else:
+            return self.llava_data[idx%self.llava_len]
+        
+    def __len__(self):
+        return max(self.proc_len, self.llava_len)
+    
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images_batch:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "datanames": datanames,
+            "answers": answers,
+        }
+
+        return return_dict
 
 
 class LLaVAInstructTune(Dataset):
@@ -427,15 +490,17 @@ class LLaVAInstructTune(Dataset):
         #else:
         #    img = Image.new("RGB", (224, 224), (255, 255, 255)) 
 
-        if im_file is not None:
-            if "<image>" not in question:
-                question = question + " <image> \n"
+        if "<image>" in question:
+            question = question.replace("<image>", "")
+
+        image_prompt_format = "<image>"*len(img)
         
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
         if self.args['mode'] == "train":
-            prompt = f"## Answer in natural language. {question} \n Answer: \n {answer} \n###"
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} ###Assistant: \n {answer} \n###"
             text_labels = prompt
         else:
-            prompt = f"## {question} \n Answer: \n"
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} ###Assistant: \n "
             text_labels = prompt + answer + " \n###"
 
         caption = prompt
@@ -444,7 +509,10 @@ class LLaVAInstructTune(Dataset):
         house_json = {}
         objs_present = []
         # pdb.set_trace()
-        return [im_file,], img, caption, prompt, text_labels, program_text, house_json, objs_present
+        if self.args.get("qa_format"):
+            return [im_file,], img, prompt, text_labels, answer, [answer,], "llava_instructtune"
+        else:
+            return [im_file,], img, caption, prompt, text_labels, program_text, house_json, objs_present
     
     def __len__(self):
         return len(self.data)
@@ -483,15 +551,161 @@ class LLaVAInstructTune(Dataset):
             "labels": input_ids,
             "prompts": prompts,
             "text_labels": text_labels,
-            "program_texts": program_texts,
-            "house_json": house_jsons,
-            "image_lists": image_paths,
-            'objs_present': objs_present,
         }
 
         return return_dict
 
 
+class ProcTHOR_reasoning(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor 
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+
+        nav_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
+        spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas.json'
+
+        nav_data = json.load(open(nav_qa_json_path))
+        spatial_data = json.load(open(spatial_qa_json_path))
+
+        self.data = []
+        if args.get("split") == "train":
+            for house_ind, cam_pos, cam_rot, qa_entries in nav_data[:int(len(nav_data)*0.8)]:
+                self.data.extend(qa_entries)
+            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[:int(len(spatial_data)*0.8)]:
+                self.data.extend(qa_entries)
+        elif args.get("split") == "valtrain":
+            for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.8):int(len(nav_data)*0.9)]:
+                self.data.extend(qa_entries)
+            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0.8):int(len(spatial_data)*0.9)]:
+                self.data.extend(qa_entries)
+        elif args.get("split") == "val":
+            for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.8):]:
+                self.data.extend(qa_entries)
+            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0):]:
+                self.data.extend(qa_entries)
+        
+        random.shuffle(self.data)
+        print("Total number of data points: ", len(self.data))
+
+
+    def __getitem__(self, idx):
+        qa_entry = self.data[idx]
+        
+        question, image_order, answer_choices = qa_entry
+
+        # judge the question type
+        question_type = "other"
+        if "how many" in question.lower():
+            question_type = "count"
+        
+        if "did i likely move" in question.lower():
+            question_type = "action_sequence"
+
+        if ("if i" in question.lower() and "the camera?" in question.lower()):
+            question_type = "obj_action_movement"
+
+        if "would i be moving more" in question.lower():
+            question_type = "relative_obj_action_movement"
+
+        if "object is closer to the camera" in question.lower():
+            question_type = "obj_depth"
+        
+        if "consider the relative distances" in question.lower():
+            question_type = "obj_positions"
+
+
+        correct_answer = answer_choices[0]
+        
+        hard_distractor = None
+        if question_type == "action_sequence":
+            hard_distractor = answer_choices[2]
+        
+        
+        if hard_distractor is not None:
+            ans_choice_order = ['"'+correct_answer+'"', '"'+answer_choices[1]+'"', '"'+hard_distractor+'"']
+            random.shuffle(ans_choice_order)
+            answer_choices_format = " or ".join(ans_choice_order)
+            question_type+="_hard"
+        else:
+            ans_choice_order = answer_choices
+            ans_choice_order = ['"'+ans+'"' for ans in ans_choice_order]
+            random.shuffle(ans_choice_order)
+            answer_choices_format = " or ".join(ans_choice_order)
+        
+        image_prompt_format = "<image>"*len(image_order)
+
+        if self.args['mode'] == "zero_shot":
+            '''
+            A chat between a curious human and an artificial intelligence assistant. 
+            The assistant gives helpful, detailed, and polite answers to the human's questions.###Human: <im_start><image><im_end>
+            Human: Describe the image and color details.###Assistant:
+            The image features a wooden pier extending out into a large body of water, possibly a lake or a bay. The pier is surrounded by a serene environment, with trees and mountains in the background. The water appears to be calm and clear, making it an ideal spot for relaxation or leisurely activities. The scene is captured in black and white, giving it a timeless and classic feel.
+            '''
+            prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+            prompt = f"{prefix}.###Human: <im_start>{image_prompt_format}<im_end> \nHuman: {question} Choose between the following options: {answer_choices_format}.###Assistant: \n "
+            text_label = prompt + correct_answer + " \n###"
+
+        else:
+            prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+            if self.args['mode'] == "train":
+                prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Choose between the following options: {answer_choices_format}.###Assistant: \n {correct_answer} \n###"
+                text_label = prompt
+            else:
+                prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Choose between the following options: {answer_choices_format}.###Assistant: \n" 
+                text_label = prompt + correct_answer + " \n###"
+
+        images = [Image.open(img).convert("RGB") for img in image_order]
+
+        # pdb.set_trace()
+
+        return image_order, images, prompt, text_label, correct_answer, answer_choices, f"procthor_reasoning_{question_type}"
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images_batch:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
 
 
 class ProcTHOR_image_camposition_marked(Dataset):
@@ -563,6 +777,8 @@ class ProcTHOR_image_camposition_marked(Dataset):
         
     def __getitem__(self, idx):
         
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+
         room_data = self.data[idx]
 
         program_text, house_json, og_house_json, cam_ind_to_position, all_imgs, all_objs, all_seg_frames, color_to_objid, obj_id_to_name = room_data
@@ -933,7 +1149,7 @@ class ProcTHOR_image_camposition_marked(Dataset):
 
             if self.args.get("incontext_language"):
                 prefix_options = [
-                    f"## <image> Imagine that in a 3D cubical space looking from the top down, x goes from left to right, y comes out towards the camera out of the plane, and z goes from bottom to top. \
+                    f"{prefix}###Human: <im_start><image><im_end> \nHuman: Imagine that in a 3D cubical space looking from the top down, x goes from left to right, y comes out towards the camera out of the plane, and z goes from bottom to top. \
 The rotations are always specified as around the y axis (axis coming towards camera) with respect to positive z-axis rotating clockwise in the top down view. \
 For instance, 90 degrees rotation means pointing towards the positive x axis (towards the right when looking from top down) and so on. \
 The image was taken by placing the camera at (x,z) {cam_pos} with rotation as {cam_angle} degrees. \
@@ -949,7 +1165,7 @@ Can you please do this for the image shown? Please just output the description i
                 ]
             elif self.args.get("incontext_pointmark"):
                 prefix_options = [
-                    f"## <image> In this image, x increases from left to right, y increases from bottom to top, and z increases towards the direction you are looking at (depth). \
+                    f"{prefix}###Human: <im_start><image><im_end> \nHuman: In this image, x increases from left to right, y increases from bottom to top, and z increases towards the direction you are looking at (depth). \
 You are at ({cam_pos[0]}, 95, {cam_pos[1]}). \
 The red dot marked in the image is at {max_dist_obj_pos}. Using this information, can you roughly estimate the locations of all the objects in the room? Just try to the best of your abilities. Objects to the left of the dot will have a lower x. Objects closer to the camera from the dot will have a lower z. And, objects lower in height from the camera height will have a lower y.  \
 Please output each object along with the location on each line with no other text in the following format: \n Object name at location (x, y, z). eg, Brown bed at (10, 15, 20) \
@@ -967,7 +1183,7 @@ Please output each object along with the location on each line with no other tex
                 ]
             else:
                 prefix_options = [
-                    f"## Answer in a structured JSON format. <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
+                    f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in a structured JSON format. The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n",
                 ]
 
         if self.args['mode'] == "train":
@@ -1068,16 +1284,21 @@ class GQA(Dataset):
 
         image = Image.open(im_file).convert("RGB")
 
-        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
 
-        return [image,], prompt, answer, question, "GQA"
+        image_prompt_format = "<image>"
+
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n "
+        text_label = prompt + answer
+
+        return [image,], prompt, text_label, answer, "GQA"
 
     def __len__(self):
         return len(self.data)
 
     def collate_fn(self, batch):
         
-        images, prompts, answers, questions, datanames = zip(*batch)
+        images, prompts, text_labels, answers, datanames = zip(*batch)
 
         new_images = []
         for image_b in images:
@@ -1098,12 +1319,6 @@ class GQA(Dataset):
             attention_mask.append(torch.ones_like(input_id))
         input_ids = torch.stack(input_ids, dim=0)
         attention_mask = torch.stack(attention_mask, dim=0)
-        
-        text_labels = []
-        for prompt, ans in zip(prompts, answers):
-            
-            text_label = prompt + ans
-            text_labels.append(text_label)
 
         # pdb.set_trace()
         return_dict = {
@@ -1148,15 +1363,21 @@ class VQAV2(Dataset):
 
         image = Image.open(im_file).convert("RGB")
 
-        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
 
-        return [image,], prompt, answer, question, "vqav2"
+        image_prompt_format = "<image>"
+
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n "
+
+        text_label = prompt + answer
+
+        return [image,], prompt, text_label, answer, "vqav2"
 
     def __len__(self):
         return len(self.data)
 
     def collate_fn(self, batch):
-        images, prompts, answers, questions, datanames = zip(*batch)
+        images, prompts, text_labels, answers, datanames = zip(*batch)
 
         new_images = []
         for image_b in images:
@@ -1177,11 +1398,6 @@ class VQAV2(Dataset):
             attention_mask.append(torch.ones_like(input_id))
         input_ids = torch.stack(input_ids, dim=0)
         attention_mask = torch.stack(attention_mask, dim=0)
-
-        text_labels = []
-        for prompt, ans in zip(prompts, answers):
-            text_label = prompt + ans
-            text_labels.append(text_label)
 
         # pdb.set_trace()
         return_dict = {
@@ -1225,17 +1441,21 @@ class OKVQA(Dataset):
 
         image = Image.open(im_file).convert("RGB")
 
-        prompt = f"## Answer in natural language. {question}. Answer the question using a single word or phrase. <image> \n \n Answer: \n"
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+
+        image_prompt_format = "<image>"
+
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n "
 
         text_label = prompt + answer
 
-        return [image,], prompt, answer, text_label, "okvqa"
+        return [image,], prompt, text_label, answer, "okvqa"
 
     def __len__(self):
         return len(self.data)
 
     def collate_fn(self, batch):
-        images, prompts, answers, text_labels, datanames = zip(*batch)
+        images, prompts, text_labels, answers, datanames = zip(*batch)
 
         new_images = []
         for image_b in images:
@@ -1352,8 +1572,15 @@ class CVBench(Dataset):
         image = self.data['image'][idx]
         question = self.data['question'][idx]
 
-        prompt = "## Answer in natural language. " + question + " Answer the question using a single word or phrase. <image> \n Answer: \n"
         choices = self.data['choices'][idx]
+        choice_format = ", ".join(choices[:-1]) + ", or "+choices[-1]
+
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        image_prompt_format = "<image>"
+
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Choose between the following options: {choice_format}.###Assistant: \n "
+        
         answer = self.data['answer'][idx]
         answer = answer.replace("(", "").replace(")", "")
         answer = choices[self.choice_to_number[answer]]
@@ -1409,10 +1636,11 @@ class BLINK(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.tokenizer = tokenizer
         self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
 
         dataset_name = 'BLINK-Benchmark/BLINK'
 
-        SUBTASK_NAME = ['Multi-view_Reasoning', 'Relative_Depth', 'Spatial_Relation', 'Object_Localization',]
+        SUBTASK_NAME = ['Multi-view_Reasoning', 'Relative_Depth', 'Spatial_Relation'] # , 'Object_Localization',]
 
         self.data = []
         for subtask in SUBTASK_NAME:
@@ -1443,16 +1671,19 @@ class BLINK(Dataset):
             image_2 = entry['image_2']
             images.append(image_2)
 
-        prompt = "## Answer in natural language. "+ question + " Answer the question using a single word or phrase. "+ "<image>"*len(images) + "\n Answer: \n"
-        text_label = prompt + answer
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        image_prompt_format = "<image>"*len(images)
 
-        return images, prompt, answer, text_label, "BLINK_"+subtask
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Choose between the following options: {choice_format}.###Assistant: \n "
+        text_label = prompt + answer
+        
+        return images, prompt, text_label, answer, "BLINK_"+subtask
 
     def __len__(self):
         return len(self.data)
 
     def collate_fn(self, batch):
-        images, prompts, answers, text_labels, subtasks = zip(*batch)
+        images, prompts, text_labels, answers, subtasks = zip(*batch)
 
         new_images = []
         for image_b in images:

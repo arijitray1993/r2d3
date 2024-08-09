@@ -566,7 +566,7 @@ class LlavaModel_16V_Interface(nn.Module):
         self.num_beams = args['num_beams']
         self.max_new_tokens = args['max_new_tokens']
 
-        self.keywords = ["###", " \n###"]
+        self.keywords = ["\n###"]
 
     def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
         stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
