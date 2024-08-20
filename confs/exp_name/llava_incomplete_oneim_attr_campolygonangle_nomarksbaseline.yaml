@@ -9,14 +9,16 @@ batch_size: 1
 lr: 0.000005
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 
-lora_model_path: False # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_attr_campolygonangle_nomarksbaseline/brisk-dew-7_110000
+gradient_accumulation_steps: 8
+
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_attr_campolygonangle_nomarksbaseline/polar-blaze-30_110000
 
 eval_every: 5000
-num_eval_steps: 3
+num_eval_steps: 500
 no_shuffle: False
 
 freeze_vision: False
@@ -72,5 +74,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
+  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
 ]

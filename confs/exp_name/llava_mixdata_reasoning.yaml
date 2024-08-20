@@ -6,18 +6,18 @@ num_workers: 4
 ### loading checkpoints, eval, train options
 num_epochs: 50
 batch_size: 1
-lr: 0.00001
+lr: 0.000005
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
-gradient_accumulation_steps: 16
+gradient_accumulation_steps: 8
 
-lora_model_path: False
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning/lemon-pond-22_110000
 
 eval_every: 5000
-num_eval_steps: 5
+num_eval_steps: 2000
 
 no_shuffle: False
 
@@ -28,7 +28,8 @@ train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
-  num_data_points: 100000
+  num_data_points: 100000,
+  prompt_mode: "text_choice"
 }
 train_collate_fn: "collate_fn"
 
@@ -38,6 +39,7 @@ valtrain_dataset_choice: "ProcTHOR_reasoning"
 valtrain_dataset_args: {
   split: "valtrain",
   mode: "val",
+  prompt_mode: "text_choice"
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
@@ -45,6 +47,7 @@ val_dataset_choice: "ProcTHOR_reasoning"
 val_dataset_args: {
   split: "val",
   mode: "val",
+  prompt_mode: "text_choice"
 }
 val_collate_fn: "collate_fn" 
 
@@ -64,5 +67,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['QAAccuracy', 'QAAccuracy', [], []],
+  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
 ]

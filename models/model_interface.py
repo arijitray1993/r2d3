@@ -23,7 +23,7 @@ from minigpt4.tasks import *
 from transformers import StoppingCriteria, StoppingCriteriaList
 from transformers import LlamaForCausalLM, CodeLlamaTokenizer
 from transformers import CLIPVisionModel, CLIPImageProcessor
-
+from transformers import InstructBlipProcessor, InstructBlipForConditionalGeneration, InstructBlipConfig, Blip2Processor, Blip2ForConditionalGeneration
 # sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
 sys.path.append("models/LLaVA_modified/LLaVA")
 from llava.model.builder import load_pretrained_model
@@ -566,7 +566,7 @@ class LlavaModel_16V_Interface(nn.Module):
         self.num_beams = args['num_beams']
         self.max_new_tokens = args['max_new_tokens']
 
-        self.keywords = ["\n###"]
+        self.keywords = ["\n###", "###"]
 
     def generate(self, input_ids, pixel_values, attention_mask=None, labels=None):
         stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
@@ -747,6 +747,71 @@ class LlavaModelAggImgInterface(nn.Module):
         return outputs
 
 
+class Blip2ModelInterface(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        #config = InstructionBlipConfig.from_pretrained("Salesforce/instructblip-vicuna-7b")
+        #config.max_position_embeddings = 2048
+        #self.model = InstructBlipForConditionalGeneration.from_pretrained("Salesforce/instructblip-vicuna-7b")
+        
+        self.model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b", device_map="auto", torch_dtype=torch.float16)
+        
+        
+        self.model = self.model.half()
+
+        self.image_processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
+        self.tokenizer = None
+
+        self.max_new_tokens = args['max_new_tokens']
+
+    def generate(self, input_ids, attention_mask, pixel_values, labels=None):
+        
+        generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values)
+
+        return generated_ids
+
+    def forward(self, input_ids, attention_mask, pixel_values, labels=None):
+        
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, labels=labels)
+
+        return outputs
+    
+class InstructBlipModelInterface(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        
+        self.model = InstructBlipForConditionalGeneration.from_pretrained("Salesforce/instructblip-vicuna-7b")
+        
+        self.model = self.model.half()
+
+        self.image_processor = InstructBlipProcessor.from_pretrained("Salesforce/instructblip-vicuna-7b")
+        self.tokenizer = None
+
+    def generate(self, input_ids, qformer_input_ids, attention_mask, qformer_attention_mask, pixel_values, labels=None):
+        
+        generated_ids = self.model.generate(input_ids=input_ids, qformer_input_ids=qformer_input_ids, attention_mask=attention_mask, qformer_attention_mask=qformer_attention_mask, pixel_values=pixel_values,
+                                                do_sample=False, num_beams=5, max_length=256, min_length=1, top_p=0.9, repetition_penalty=1.5, length_penalty=1.0, temperature=1,)
+
+        return generated_ids
+
+    def forward(self, input_ids, qformer_input_ids, attention_mask, qformer_attention_mask, pixel_values, labels=None):
+        
+        outputs = self.model(input_ids=input_ids, qformer_input_ids=qformer_input_ids, attention_mask=attention_mask, qformer_attention_mask=qformer_attention_mask, pixel_values=pixel_values, labels=labels)
+
+        return outputs
+
+class KOSMOS2ModelInterface(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.model = Kosmos2ForConditionalGeneration.from_pretrained("microsoft/kosmos-2-patch14-224")
+        self.image_processor = AutoProcessor.from_pretrained("microsoft/kosmos-2-patch14-224")
+        
+        
+    def generate(self, input_ids, attention_mask, pixel_values, labels=None):
+        pass
+    
+    def forward(self, input_ids, attention_mask, pixel_values, labels=None):
+        pass
 
 class CodeLLamaInterface(nn.Module):
     def __init__(self, args):

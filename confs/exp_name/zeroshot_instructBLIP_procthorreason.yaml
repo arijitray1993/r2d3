@@ -1,4 +1,4 @@
-exp_name: zeroshot_llava_procthorreason
+exp_name: zeroshot_instructBLIP_procthorreason
 device: 'gpu'
 num_workers: 4
 
@@ -28,26 +28,21 @@ val_dataset_args: {
   split: "val",
   mode: "val",
   prompt_mode: "zero_shot",
+  instructBLIP: True,
 }
 val_collate_fn: "collate_fn" 
 
 
-
 ## define model. The name must match the class name in models/model_interface.py
-model_choice: "LlavaModel_13B_Interface"
+model_choice: "InstructBlipModelInterface"
 model_init_args: {
-  temperature: 0,
-  top_p: None,
-  num_beams: 1,
-  max_new_tokens: 768
 }
 # the model must output a huggingface output in its forward function.
- 
+
 # These are the inputs to the model. These variables must be present in the dictionary output from your dataloader in datasets/dataloaders.py.
-model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
- 
+model_input_choice: ['input_ids', 'qformer_input_ids', 'attention_mask', 'qformer_attention_mask', 'pixel_values', 'labels']
+
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
   ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
 ]
-

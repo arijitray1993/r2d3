@@ -1249,21 +1249,22 @@ class HouseNatLanguageSemSimSelectedGPT4:
 
     
     def update(self, output, gt):
-        if "#room" in output:
-            room_response = output.split(": #room \n")[-1]
-        else:
-            room_response = output.split(": \n")[-1]
-
-        room_json_text = "\n".join(room_response.split("\n")[:-1])
-        room_json_text = room_json_text.split("###")[0]
+        
+        room_json_text = output.split("Answer:")[-1].strip()
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
 
+        # pdb.set_trace()
         try:
-            pred_house_dict = yaml.load(room_json_text, Loader=yaml.FullLoader)
-            if isinstance(pred_house_dict, list):
-                # join them into one dict
-                pred_house_dict = {k: v for d in pred_house_dict for k, v in d.items()}
+            room_list = room_json_text.split("\n")
+            if len(room_list) == 1:
+                room_list = room_json_text.split(".")
+            pred_house_dict = {}
+            for entry in room_list:
+                obj = entry.split(" at location ")[0]
+                loc = entry.split(" at location ")[-1].split(".")[0].strip()
+                pred_house_dict[obj] = loc
+
         except:
             pred_house_dict = {}
         if pred_house_dict is None:
@@ -1292,11 +1293,11 @@ class HouseNatLanguageSemSimSelectedGPT4:
             print(gt_house_text)
         self.gt_house_jsons.append(gt_house_dict)
         
-        # self.selected_objs.append(gt['objs_present'][0])
+        self.selected_objs.append(gt['objs_present'])
         
     
     def compute(self):
-        for pred_house, gt_house in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons)):
+        for pred_house, gt_house, selected_objs in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons, self.selected_objs)):
             if pred_house is None:
                 self.json_accuracy.append(0)
                 continue
@@ -1322,6 +1323,8 @@ class HouseNatLanguageSemSimSelectedGPT4:
             # make counts of objects and locations
             gt_objs = defaultdict(list)
             i=0
+            objid_to_class = {}
+
             while(True):
                 if f'obj_{i}' not in gt_house and f'Object {i}' not in gt_house:
                     break
@@ -1330,11 +1333,12 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 obj_desc = obj_entry.split("at location")[0].strip()
                 obj_loc = ast.literal_eval(obj_entry.split("at location")[-1].split("with rotation")[0].strip())
                 obj_rot = ast.literal_eval(obj_entry.split("with rotation")[-1].strip())
-                
+                objid_to_class[f'obj_{i}'] = get_obj_class_from_desc_pred(obj_desc, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
                 
                 gt_objs[obj_desc].append((obj_loc, [0, 0, 0], obj_desc))
                 i += 1
             
+            selected_objs = [objid_to_class[obj] for obj in selected_objs]
             pred_objs = defaultdict(list)
             
             for obj_desc in pred_house:
@@ -1342,15 +1346,27 @@ class HouseNatLanguageSemSimSelectedGPT4:
                     obj_loc = pred_house[obj_desc]
                 except:
                     pdb.set_trace()
-
+                # pdb.set_trace()
                 if isinstance(obj_loc, str):
-                    obj_loc = "["+obj_loc.split('[')[-1]
-                    obj_loc = ast.literal_eval(obj_loc)
+                    obj_loc = obj_loc.strip()
+                    if "]" not in obj_loc:
+                        obj_loc+="]"
+                    if "[" not in obj_loc:
+                        obj_loc = "["+obj_loc
+                    try:
+                        obj_loc = ast.literal_eval(obj_loc)
+                    except:
+                        self.json_accuracy.append(0)
+                        continue
                     if not isinstance(obj_loc, list):
+                        self.json_accuracy.append(0)
+                        continue
+                    if len(obj_loc) != 3:
+                        self.json_accuracy.append(0)
                         continue
                 
                 pred_objs[obj_desc].append((obj_loc, [0, 0, 0], obj_desc))
-            
+            # pdb.set_trace()
             if len(pred_objs) == 0:
                 self.json_accuracy.append(0)
                 continue
@@ -1362,10 +1378,7 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
                 pred_obj_classes[obj_class].extend(pred_objs[obj])
             
-            #if len(selected_objs)>0:
-            #    selected_obj_classes = [self.assetdesc_to_obj[obj][0][0] for obj in selected_objs]
-            #else:
-            #    selected_obj_classes = []
+            selected_obj_classes = selected_objs
             
             pred_locations = {}
             gt_locations = defaultdict(list)
@@ -1375,13 +1388,13 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 except:
                     pdb.set_trace()
                 if obj_class in pred_obj_classes:
-                    # if obj_class in selected_obj_classes:
-                    self.object_class_accuracy.append(1)
-                    pred_locations[obj_class] = pred_obj_classes[obj_class]
-                    gt_locations[obj_class].extend(gt_objs[obj])
+                    if obj_class in selected_obj_classes:
+                        self.object_class_accuracy.append(1)
+                        pred_locations[obj_class] = pred_obj_classes[obj_class]
+                        gt_locations[obj_class].extend(gt_objs[obj])
                 else:
-                    # if obj_class in selected_obj_classes:
-                    self.object_class_accuracy.append(0)
+                    if obj_class in selected_obj_classes:
+                        self.object_class_accuracy.append(0)
             
             # pdb.set_trace()
             # compute hungarian matching of predicted object locations to gt object locations
@@ -1391,34 +1404,34 @@ class HouseNatLanguageSemSimSelectedGPT4:
 
                 # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
                 mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
-                # if obj in selected_obj_classes:
-                self.object_location_accuracy.append(accuracy)
-                self.object_location_error.append(mean_dist/max_dimension)
-                self.object_pose_accuracy.append(pose_accuracy)
-                self.object_pose_error.append(mean_pose_dist)
-                self.object_attr_similarity.append(attr_sim)
+                if obj in selected_obj_classes:
+                    self.object_location_accuracy.append(accuracy)
+                    self.object_location_error.append(mean_dist/max_dimension)
+                    self.object_pose_accuracy.append(pose_accuracy)
+                    self.object_pose_error.append(mean_pose_dist)
+                    self.object_attr_similarity.append(attr_sim)
             
             for obj in gt_objs:
                 obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
-                # if obj_class in selected_obj_classes:
-                if obj in pred_objs:
-                    self.object_finegrain_accuracy.append(1)
-                else:
-                    self.object_finegrain_accuracy.append(0)
-            
-            for obj in gt_objs:
-                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
-                # if obj_class in selected_obj_classes:
-                if obj in pred_objs:
-                    count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
-                    self.object_count_error.append(count_diff)
-                    if count_diff == 0:
-                        self.object_count_acc.append(1)
+                if obj_class in selected_obj_classes:
+                    if obj in pred_objs:
+                        self.object_finegrain_accuracy.append(1)
                     else:
+                        self.object_finegrain_accuracy.append(0)
+            
+            for obj in gt_objs:
+                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
+                if obj_class in selected_obj_classes:
+                    if obj in pred_objs:
+                        count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
+                        self.object_count_error.append(count_diff)
+                        if count_diff == 0:
+                            self.object_count_acc.append(1)
+                        else:
+                            self.object_count_acc.append(0)
+                    else:
+                        self.object_count_error.append(len(gt_objs[obj]))
                         self.object_count_acc.append(0)
-                else:
-                    self.object_count_error.append(len(gt_objs[obj]))
-                    self.object_count_acc.append(0)
 
         # pdb.set_trace()
         if len(self.object_location_accuracy) == 0:
@@ -1693,7 +1706,6 @@ class HouseJsonSimilarity:
 
 
 class QAAccuracy:
-
     def __init__(self, args):
         self.outputs = []
         self.accs = []
@@ -1703,11 +1715,136 @@ class QAAccuracy:
     def update(self, output, gt):
         
         data_name = gt['dataset'][0]
-        gt_question = gt['prompts']
+        gt_question = gt['prompts'][0]
         gt_answers = gt['answers']
         pred_answers = output
 
-        format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
+        format_answer = pred_answers.split("###")[0].strip().lower()
+        
+        if format_answer == "":
+            if "###Human" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Human:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+            elif "###Assistant" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###")[0].strip().lower()
+            else:
+                format_answer = pred_answers.split("###")[0].strip().lower()
+
+        # pdb.set_trace()
+        format_answer_words = [format_answer,]
+        # pdb.set_trace()
+        gt_answer = gt_answers[0].lower().strip()
+
+        gt_answer = gt_answer.replace("(", "")
+        gt_answer = gt_answer.replace(")", "")
+
+        gt_answer_words = [gt_answer,]
+        
+        if "BLINK" in data_name:
+            if "is closer" in gt_answer:
+                gt_answer_word = gt_answer.split(" is closer")[0].split(" ")[-1].strip().lower()
+                gt_answer_words = [gt_answer_word]
+
+                format_answer_word = format_answer.split(" is closer")[0].split(" ")[-1].strip().lower()
+                format_answer_words = [format_answer_word]
+                # pdb.set_trace()
+
+        if "which object is closer" in gt_question.lower():
+            if 'is closer' in format_answer:
+                format_answer_words = [format_answer.split(" is closer")[0].split(" ")[-1].strip().lower(), format_answer.split("is closer ")[1].split(" ")[0].strip().lower()]
+            elif 'are closer' in format_answer:
+                format_answer_words = [format_answer.split(" are closer")[0].split(" ")[-1].strip().lower(), format_answer.split("are closer ")[1].split(" ")[0].strip().lower()]
+            elif "is situated closer" in format_answer:
+                format_answer_words = [format_answer.split(" is situated closer")[0].split(" ")[-1].strip().lower(), format_answer.split("is situated closer ")[1].split(" ")[0].strip().lower()]
+            elif "are situated closer" in format_answer:
+                format_answer_words = [format_answer.split(" are situated closer")[0].split(" ")[-1].strip().lower(), format_answer.split("are situated closer ")[1].split(" ")[0].strip().lower()]
+            else:
+                format_answer_words = [format_answer_words[0],]
+
+        if 'is the camera moving' in gt_question.lower():
+            if 'moving' in format_answer:
+                format_answer_word = format_answer.split("moving ")[1].split(" ")[0].strip().lower()
+                if format_answer_word == "clockwise":
+                    format_answer_word = "left"
+                elif format_answer_word == "counter-clockwise":
+                    format_answer_word = "right"
+                else:
+                    format_answer_word = format_answer_word
+                format_answer_words = [format_answer_word]
+            else:
+                format_answer_words = [format_answer_words[0],]
+        
+        if 'considering the relative positions' in gt_question.lower():
+            if 'is located to' in format_answer:
+                if "right" in format_answer:
+                    format_answer_words = ["right"]
+                else:
+                    format_answer_words = ["left"]
+            else:
+                format_answer_words = [format_answer_words[0],]
+
+
+        correct = 0
+        for word in gt_answer_words:
+            if word in format_answer_words:
+                correct = 1
+
+        self.accs.append(correct)
+
+        print("GT: ", gt_answer_words)
+        print("Pred: ", format_answer_words)
+        print("Correct: ", correct)
+
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name))
+
+        
+    def compute(self):
+        
+        with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+            json.dump(self.outputs, f)
+
+        # acc by data name
+        data_accs = {}
+        for out_entry, acc in zip(self.outputs, self.accs):
+            data_name = out_entry[-1]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+            data_accs[data_name].append(acc)
+
+        for data_name in data_accs:
+            acc = np.mean(data_accs[data_name])
+            print("Num data points: ", len(data_accs[data_name]))
+            self.logger.log({f"{data_name}_acc": acc})
+    
+
+class QA_Accuracy_choice:
+    def __init__(self, args):
+        self.outputs = []
+        self.accs = []
+        self.logger = args['logger']
+        self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+    
+    def update(self, output, gt):
+        
+        data_name = gt['dataset'][0]
+        gt_question = gt['prompts'][0]
+        gt_answers = gt['answers']
+        pred_answers = output
+
+        format_answer = pred_answers.split("###")[0].strip().lower()
+        
+        if format_answer == "":
+            if "###Human" in pred_answers:
+                format_answer = pred_answers.split("###Human:")[1].split("###")[0].strip().lower()
+            elif "###Assistant" in pred_answers:
+                format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+            else:
+                format_answer = pred_answers.split("###")[0].strip().lower()
 
         # pdb.set_trace()
         gt_answer = gt_answers[0].lower().strip()
@@ -1715,19 +1852,16 @@ class QAAccuracy:
         gt_answer = gt_answer.replace("(", "")
         gt_answer = gt_answer.replace(")", "")
 
-        gt_answer_words = gt_answer.split(" ")
-        
-        if "BLINK" in data_name:
-            if "is closer" in gt_answer:
-                gt_answer_word = gt_answer_words[0]
-                gt_answer_words = [gt_answer_word]
-                # pdb.set_trace()
-                 
-            
-        correct = 0
-        for word in gt_answer_words:
-            if word in format_answer:
-                correct = 1
+        format_answer = format_answer.replace("(", "")
+        format_answer = format_answer.replace(")", "")
+
+        format_answer = format_answer.strip().split(" ")[0]
+
+        print("GT: ", gt_answer)
+        print("Pred: ", format_answer)
+        print("Correct: ", gt_answer == format_answer)
+
+        correct = gt_answer == format_answer
 
         self.accs.append(correct)
 
@@ -1749,10 +1883,11 @@ class QAAccuracy:
 
         for data_name in data_accs:
             acc = np.mean(data_accs[data_name])
+            print("Num data points: ", len(data_accs[data_name]))
             self.logger.log({f"{data_name}_acc": acc})
-    
-class ReasoningAccuracy:
 
+
+class ReasoningAccuracy:
     def __init__(self, args):
         self.outputs = []
         self.accs = []
@@ -1771,53 +1906,20 @@ class ReasoningAccuracy:
         format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
         gt_answer = gt_answers[0].lower().strip()
 
-        if "push" in gt_question or "pull" in gt_question:
-            if "it" in format_answer:
-                format_answer = format_answer.replace(" it ", " ")
-
         correct = gt_answer in format_answer
 
         incorrect_answers = [ans for ans in answer_choices if gt_answer not in ans.lower().strip()]
 
         for inc_ans in incorrect_answers:
             if inc_ans in format_answer:
-                correct = 0
+                correct = False
                 break
+        
+        print("GT: ", gt_answer)
+        print("Pred: ", format_answer)
+        print("Correct: ", correct)
 
-        if "obj_positions" in data_name:
-            depth = ""
-            left_right = ""
-
-            pred_depth = ""
-            pred_left_right = ""
-            if "behind" in gt_answer:
-                depth = "behind"
-            elif "in front" in gt_answer:
-                depth = "in front"
-            
-            if "left" in gt_answer:
-                left_right = "left"
-            elif "right" in gt_answer:
-                left_right = "right"
-            
-            if "behind" in format_answer and not "in front" in format_answer:
-                pred_depth = "behind"
-            
-            if "in front" in format_answer and not "behind" in format_answer:
-                pred_depth = "in front"
-            
-            if "left" in format_answer and not "right" in format_answer:
-                pred_left_right = "left"
-            
-            if "right" in format_answer and not "left" in format_answer:
-                pred_left_right = "right"
-
-            if depth == pred_depth and left_right == pred_left_right:
-                correct = 1
-            else:
-                correct = 0
-
-        random_correct = random.random()>(1/len(answer_choices))
+        random_correct = random.choice(answer_choices).lower().strip() == gt_answer
             
         self.accs.append(correct)
         self.random_accs.append(random_correct)
@@ -1854,3 +1956,131 @@ class ReasoningAccuracy:
 
             ran_acc = np.mean(data_random_acc[data_name])
             self.logger.log({f"{data_name}_random_acc": ran_acc})
+
+
+class ReconQAAccGPT:
+    def __init__(self, args):
+        self.outputs = []
+        self.obj_class_accs = []
+        self.obj_loc_accs = []
+        self.logger = args['logger']
+    
+    def update(self, output, gt):
+        
+        gt_question = gt['prompts']
+        gt_answers = gt['answers']
+        answer_choices = gt['answer_choices']
+        pred_answers = output
+
+        format_answer = pred_answers.strip().lower()
+        gt_answer = gt_answers.lower().strip()
+
+        not_present_words = ['not present', 'no']
+        
+        not_present = False
+        for no_word in not_present_words:
+            if no_word in format_answer:
+                not_present = True
+
+        if not_present:
+            self.obj_class_accs.append(0)
+        else:
+            self.obj_class_accs.append(1)
+            format_answer = format_answer.replace('"', '')
+            format_answer = format_answer.replace("'", "")
+            format_answer = format_answer.replace("(", "[")
+            format_answer = format_answer.replace(")", "]")
+            if "[" not in format_answer:
+                format_answer = "["+format_answer
+            if "]" not in format_answer:
+                format_answer = format_answer + "]"
+            
+            # if multiple such pattersn, just take the last one since the answer is often at the end. 
+            format_answer = "["+format_answer.split("[")[-1].split("]")[0].strip()+"]"
+
+            
+            try:
+                format_answer = ast.literal_eval(format_answer)
+                gt_answer = ast.literal_eval(gt_answer)
+                correct = np.allclose(gt_answer, format_answer, atol=0.1)
+            except:
+                correct = False
+            
+            print("GT: ", gt_answer)
+            print("Pred: ", format_answer)
+            print("Correct: ", correct)
+
+            self.obj_loc_accs.append(correct)
+        
+    def compute(self):
+        
+        # overall acc
+        obj_class_acc = np.mean(self.obj_class_accs)
+        obj_loc_acc = np.mean(self.obj_loc_accs)
+
+        self.logger.log({"reconqa_obj_class_acc": obj_class_acc})
+        self.logger.log({"reconqa_obj_loc_acc": obj_loc_acc})
+
+
+class ReconQAAcc:
+    def __init__(self, args):
+        self.outputs = []
+        self.obj_class_accs = []
+        self.obj_loc_accs = []
+        self.logger = args['logger']
+    
+    def update(self, output, gt):
+        
+        gt_question = gt['prompts'][0]
+        gt_answers = gt['answers'][0]
+        answer_choices = gt['answer_choices'][0]
+        pred_answers = output
+
+        format_answer = pred_answers.strip().lower()
+        gt_answer = gt_answers.lower().strip()
+
+        not_present_words = ['not present', 'no']
+        
+        not_present = False
+        for no_word in not_present_words:
+            if no_word in format_answer:
+                not_present = True
+
+        if not_present:
+            self.obj_class_accs.append(0)
+        else:
+            format_answer = format_answer.replace('"', '')
+            format_answer = format_answer.replace("'", "")
+            format_answer = format_answer.replace("(", "[")
+            format_answer = format_answer.replace(")", "]")
+            if "[" not in format_answer:
+                format_answer = "["+format_answer
+            if "]" not in format_answer:
+                format_answer = format_answer + "]"
+            
+            # if multiple such pattersn, just take the first one 
+            format_answer = "["+format_answer.split("[")[1].split("]")[0].strip()+"]"
+
+            try:
+                format_answer = ast.literal_eval(format_answer)
+                gt_answer = ast.literal_eval(gt_answer)
+                correct = np.allclose(gt_answer, format_answer, atol=0.1)
+                self.obj_class_accs.append(1)
+            except:
+                self.obj_class_accs.append(0)
+                correct = False
+            
+            print("GT: ", gt_answer)
+            print("Pred: ", format_answer)
+            print("Correct: ", correct)
+
+            self.obj_loc_accs.append(correct)
+        
+    def compute(self):
+        
+        # overall acc
+        obj_class_acc = np.mean(self.obj_class_accs)
+        obj_loc_acc = np.mean(self.obj_loc_accs)
+
+        self.logger.log({"reconqa_obj_class_acc": obj_class_acc})
+        self.logger.log({"reconqa_obj_loc_acc": obj_loc_acc})

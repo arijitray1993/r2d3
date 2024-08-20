@@ -155,11 +155,18 @@ def get_current_state(controller):
 
 if __name__ == "__main__":
     
-    qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial/'
-    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas.json'
+    split="val"
+    if split == "train":
+        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial/'
+        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas.json'
+    else:
+        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial_{split}/'
+        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_{split}.json'
+    
     html_vis_file = '/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/3d_spatial_qas.html'
-    generate=True
-    vis=False
+    generate=False
+    vis=True
+    
 
     if generate:
         asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
@@ -180,12 +187,12 @@ if __name__ == "__main__":
             assetid2desc[asset] = random.choice(captions)
 
         dataset = prior.load_dataset("procthor-10k")
-        all_im_qas = []
-        # all_im_qas = json.load(open(qa_json_path, "r"))
+        # all_im_qas = []
+        all_im_qas = json.load(open(qa_json_path, "r"))
 
-        for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
-            #if house_ind>10:
-            #    break
+        for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
+            if house_ind < 1070:
+                continue
             house_json = house
             try:
                 controller = Controller(scene=house, width=300, height=300, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
@@ -294,7 +301,7 @@ if __name__ == "__main__":
                 xz_rotation_matrix = np.array([[np.cos(math.radians(new_rot)), -np.sin(math.radians(new_rot))], [np.sin(math.radians(new_rot)), np.cos(math.radians(new_rot))]])
 
                 # if count >1 then we need to make the exact object clear
-                if obj1_cnt > 1:
+                if False: #obj1_cnt > 1:
                     # get the distances to camera
                     obj1_distances = []
                     for asset in objid2info:
@@ -335,7 +342,7 @@ if __name__ == "__main__":
                     another_obj_desc = objid2info[another_obj][5]
 
                     another_obj_cnt = objdesc2cnt[objid2info[another_obj][1]]
-                    if another_obj_cnt > 1:
+                    if False: #another_obj_cnt > 1:
                         # get the distances to camera
                         another_obj_distances = []
                         for asset in objid2info:
@@ -456,9 +463,11 @@ if __name__ == "__main__":
                     all_im_qas.append((house_ind, cam_pos, cam_rot, qa_pair_choices))
                 
                 # pdb.set_trace()
-                json.dump(all_im_qas, open(qa_json_path, "w"))
+                
                 sample_count += 1
-        
+            
+            if house_ind % 100 == 0:
+                json.dump(all_im_qas, open(qa_json_path, "w"))
 
     if vis:
         all_im_qas = json.load(open(qa_json_path, "r"))

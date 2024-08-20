@@ -27,6 +27,7 @@ val_dataset_args: {
   split: "val",
   mode: "val",
   num_data_points: 3000,
+  zero_shot_choice_mode: True,
 }
 val_collate_fn: "collate_fn" 
 
@@ -36,7 +37,7 @@ model_init_args: {
   temperature: 0,
   top_p: None,
   num_beams: 1,
-  max_new_tokens: 768
+  max_new_tokens: 768,
 }
 # the model must output a huggingface output in its forward function.
  
@@ -46,6 +47,6 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
 #  ['HouseJsonSimilarity', 'HouseJsonSimilarity', [], []],
-  ['QAAccuracy', 'QAAccuracy', [], []],
+  ['QA_Accuracy_choice', 'QA_Accuracy_choice', [], []],
 ]
 

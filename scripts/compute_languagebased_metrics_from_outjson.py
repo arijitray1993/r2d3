@@ -50,20 +50,22 @@ def compute_metrics_from_json_gpt_simpl(json_file, logger):
     args['logger'] = logger
     accs = eval_funcs.HouseNatLanguageSemSimSelectedGPT4(args)
 
-    for entry in data[:60]:
+    for entry in data:
         # pdb.set_trace()
         prompt = entry['prompt']
         text_labels = [entry["text_label"],]
         image_path = entry["image_path"]
         response_text = entry["response"]
-        # objs_present = entry["objs_present"]
+        objs_present = entry["objs_present"]
 
         gt_dict = {}
         gt_dict['text_labels'] = text_labels
+        gt_dict['objs_present'] = objs_present
         
         # compute metrics
         accs.update(response_text, gt_dict)
         
+
     # Compute the metrics
     accs.compute()
 
@@ -87,6 +89,7 @@ def compute_metrics_from_json(json_file, logger):
 
         gt_dict = {}
         gt_dict['text_labels'] = text_labels
+        gt_dict['objs_present'] = gt_house_dict['objs_present']
         
         # compute metrics
         accs.update(output, gt_dict)
@@ -97,7 +100,7 @@ def compute_metrics_from_json(json_file, logger):
 
 if __name__=="__main__":
     
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_nomarksbaseline/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_attr_campolygonangle_onlyyuvdepth/output.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()
@@ -105,6 +108,7 @@ if __name__=="__main__":
     logger = run
     
     compute_metrics_from_json(json_file, logger)
+    #compute_metrics_from_json_gpt_simpl(json_file, logger)
 
     # compute_image_caption_metrics(json_file, logger, eval_caption_sim=False)
     

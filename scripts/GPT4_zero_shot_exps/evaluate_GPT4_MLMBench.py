@@ -69,9 +69,10 @@ if __name__=="__main__":
     args = {
         split: "val",
         mode: "val",
+        num_data_points: 3000,
     }
 
-    dataset = ProcTHOR_reasoning(args, tokenizer=None, image_processor=None)
+    dataset = AllMLMBench(args, tokenizer=None, image_processor=None)
 
     all_responses = []
     for entry in tqdm.tqdm(dataset):

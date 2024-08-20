@@ -10,11 +10,15 @@ from PIL import Image
 import cv2
 import re
 import tqdm
+import ast
+import yaml
+import numpy as np
 
 import sys
 sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/")
 sys.path.append('../../')
 from dataloaders import ProcTHOR_image_camposition_marked
+
 
 # OpenAI API Key
 api_key_file = "/projectnb/ivc-ml/array/research/robotics/openai"
@@ -64,52 +68,42 @@ def get_caption(image_path, prompt, api_key):
 
 if __name__=="__main__":
 
-    # Load the dataset
-    args = {
-      'split': "val",
-      'mode': "val",
-      'include_children': False,
-      'use_angle': True,
-      'use_attributes': True,
-      'use_incontext': True,
-      'incontext_pointmark_GPT': True,
-      'randomize_point': True,
-      'normalize_rotation': True
-    }
-
-    dataset = ProcTHOR_image_camposition_marked(args, tokenizer=None, image_processor=None)
-
-    # pdb.set_trace()
+    data = json.load(open("all_recon_qas_randompoint.json"))
 
     all_responses = []
-    for entry in tqdm.tqdm(iter(dataset)):
-        # pdb.set_trace()
-
-        image_path, img, caption, prompt, text_labels, program_text, house_json, objs_present = entry
+    for entry in tqdm.tqdm(data):
+        full_prompt = entry["prompts"]
+        image_path = entry["image_path"]
+        answers = entry['answers']
+        answer_choices = entry['answer_choices']
         
-        image_path =  image_path[0]
-
-        # prompt = prompt.split("## HUMAN: <image> ")[-1].split(" \n ASSISTANT: ")[0]
-
-        # pdb.set_trace()
-        response = get_caption(image_path, prompt, api_key)
+        response = get_caption(image_path[0], full_prompt, api_key)
 
         response_text = response.json()['choices'][0]['message']['content']
+        
+        reposnse_text = response_text.strip().lower()
+        response_text = response_text.replace("(", "[")
+        response_text = response_text.replace(")", "]")
 
-        print(response_text)
+        print("Prompt: ", full_prompt)
+        print("Answer: ", answers)
+
+        print("GPT4 response", response_text)
 
         # pdb.set_trace()
         # Save the response
         all_responses.append({
-          "prompt": prompt,
-          "text_label": text_labels,
-          "image_path": image_path,
-          "response": response_text,
-          "objs_present": objs_present
+            "prompts": full_prompt,
+            "image_path": image_path,
+            "response": response_text,
+            "answers": str(answers),
+            "answer_choices": answer_choices
         })
         # pdb.set_trace()
 
         # Save the responses
-        with open("responses_randomobjpoint_updated.json", "w") as f:
-          json.dump(all_responses, f)
+        with open("GPT4_responses_recon_qa.json", "w") as f:
+            json.dump(all_responses, f)
+
         
+    

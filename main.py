@@ -94,11 +94,13 @@ class GenericModule():
             self.num_epochs = max_epochs
             self.num_training_steps = self.num_epochs * len(train_dataloader)
 
+            num_warmup_steps = cfg.get("num_warmup_steps", 0)
+
             self.optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
             self.lr_scheduler = get_scheduler(
                 lr_scheduler_choice,
                 optimizer=self.optimizer,
-                num_warmup_steps=0,
+                num_warmup_steps=num_warmup_steps,
                 num_training_steps=self.num_training_steps
             )
 
@@ -188,15 +190,14 @@ class GenericModule():
 
             generated_ids[generated_ids==-200] = 1
             generated_text = self.test_dataloader.dataset.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-            # pdb.set_trace()
+            
             print("Generated text: ")
             print(generated_text)
 
             print("Ground truth text: ")
             print(batch["text_labels"][0])
 
-            
-            # pdb.set_trace()
+
             for entry in self.metrics:
                 metric_name = entry[0]
                 
@@ -332,6 +333,8 @@ def main(cfg: DictConfig):
                 lora_module_names = list(lora_module_names)
             else:
                 lora_module_names = ["q_proj", "v_proj"]
+                if 'instructblip' in cfg.model_choice.lower():
+                    lora_module_names = ["q_proj", "v_proj", "query", "key", "value", "qkv"]
 
             # pdb.set_trace()
             lora_config = LoraConfig(
@@ -351,7 +354,7 @@ def main(cfg: DictConfig):
             lora_model = lora_model.half()
             
             if not cfg.eval_only:
-                # go through the dict and set lora layers to requuires grad True
+                # go through the dict and set lora layers to requires grad True
                 
                 for name, param in lora_model.named_parameters():
                     set_grad =  ("q_proj" in name or "v_proj" in name) and ('weight' in name or 'bias' in name) and ('default' in name)
@@ -366,6 +369,7 @@ def main(cfg: DictConfig):
             else:
                 for name, param in lora_model.named_parameters():
                     param.requires_grad = False
+                lora_model = lora_model.merge_and_unload()
         else:
             lora_model = get_peft_model(model, lora_config)
             lora_model = lora_model.half()

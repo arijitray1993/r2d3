@@ -36,7 +36,7 @@ def get_caption(image_path, prompt, api_key):
   }
 
   payload = {
-    "model": "gpt-4-vision-preview",
+    "model": "gpt-4o",
     "messages": [
     {
         "role": "user",
@@ -73,23 +73,31 @@ if __name__=="__main__":
       'use_angle': True,
       'use_attributes': True,
       'no_polygon': True,
-      'use_incontext': True
+      'use_incontext': True,
+      'incontext_nomark_GPT': True,
+      'normalize_rotation': True
     }
 
     dataset = ProcTHOR_image_camposition_marked(args, tokenizer=None, image_processor=None)
 
     all_responses = []
-    for entry in tqdm.tqdm(dataset):
+    for entry in tqdm.tqdm(iter(dataset)):
+        # pdb.set_trace()
+
         image_path, img, caption, prompt, text_labels, program_text, house_json, objs_present = entry
         
         image_path =  image_path[0]
 
-        prompt = prompt.split("## HUMAN: <image> ")[-1].split(" \n ASSISTANT: ")[0]
+        # prompt = prompt.split("## HUMAN: <image> ")[-1].split(" \n ASSISTANT: ")[0]
 
+        pdb.set_trace()
         response = get_caption(image_path, prompt, api_key)
 
         response_text = response.json()['choices'][0]['message']['content']
+
         print(response_text)
+
+        # pdb.set_trace()
         # Save the response
         all_responses.append({
           "prompt": prompt,
@@ -101,5 +109,5 @@ if __name__=="__main__":
         # pdb.set_trace()
 
         # Save the responses
-        with open("responses_nomarkbaseline.json", "w") as f:
-            json.dump(all_responses, f)
+        with open("responses_nomarksbaseline_updated.json", "w") as f:
+          json.dump(all_responses, f)
