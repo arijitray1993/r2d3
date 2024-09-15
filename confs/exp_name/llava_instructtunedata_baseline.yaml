@@ -1,6 +1,6 @@
 exp_name: llava_instructtunedata_baseline
 device: 'gpu'
-num_workers: 2
+num_workers: 0
 
 
 ### loading checkpoints, eval, train options
@@ -9,7 +9,7 @@ batch_size: 1
 lr: 0.000005
 weight_decay: 0.000001
 lr_scheduler: "cosine"
-eval_only: True # if this is set to True, only the val dataset will be run.
+eval_only: False # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 

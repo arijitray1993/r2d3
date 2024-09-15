@@ -14,6 +14,7 @@ import ast
 import torch.nn.functional as F
 import tqdm
 import random
+from sklearn.metrics import average_precision_score
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel
@@ -184,13 +185,39 @@ def get_obj_class_from_desc_pred(obj_desc, known_desc_to_class, attrmodel, attrt
 
     # normalize embeddings
     embeddings = F.normalize(embeddings, p=2, dim=1)
-    scores = (embeddings[:1] @ embeddings[1:].T) * 100
+    scores = (embeddings[:1] @ embeddings[1:].T)
     
     max_score_ind = scores.argmax().item()
 
     best_known_desc= known_descs[max_score_ind]
 
     return known_desc_to_class[best_known_desc]
+
+def get_obj_prec_from_desc_pred(obj_desc, known_desc_to_class, attrmodel, attrtokenizer, gt_objs):
+    obj_desc = obj_desc.lower()
+    known_descs = list(known_desc_to_class.keys())
+    all_descs = [obj_desc,] + known_descs
+
+    # compute the highest similarity to known descriptions
+    batch_dict = attrtokenizer(all_descs, max_length=512, padding=True, truncation=True, return_tensors='pt')
+
+    batch_dict = {k: v.cuda() for k, v in batch_dict.items()}
+
+    outputs = attrmodel(**batch_dict)
+    embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
+
+    # normalize embeddings
+    embeddings = F.normalize(embeddings, p=2, dim=1)
+    scores = (embeddings[:1] @ embeddings[1:].T)
+    
+    pdb.set_trace()
+    # compute precision
+    known_objs = [known_desc_to_class[desc][1] for entries in desc for desc in known_descs]
+    labels = [1 if obj in gt_objs else 0 for obj in known_objs]
+
+    precision = average_precision_score(labels, scores.cpu().numpy())
+
+    return precision
 
 
 
@@ -1167,13 +1194,39 @@ class HouseNatLanguageSemSimSelected:
                 self.object_pose_error.append(mean_pose_dist)
                 self.object_attr_similarity.append(attr_sim)
             
+            
+            all_gt_assets = []
             for obj in gt_objs:
-                obj_class = self.assetdesc_to_obj[obj][0][0]
-                # if obj_class in selected_obj_classes:
-                if obj in pred_objs:
-                    self.object_finegrain_accuracy.append(1)
+                gt_obj = self.assetdesc_to_obj[obj]
+                gt_assets = [obj[1] for obj in gt_obj]
+                all_gt_assets.extend(gt_assets)
+
+            all_pred_assets = []
+            for obj in pred_objs:
+                pred_obj = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)
+                pred_assets = [obj[1] for obj in pred_obj]
+                all_pred_assets.extend(pred_assets)
+
+            
+            pred_prec = []
+            pred_recall = []
+            for asset in all_pred_assets:
+                if asset in all_gt_assets:
+                    pred_prec.append(1)
                 else:
-                    self.object_finegrain_accuracy.append(0)
+                    pred_prec.append(0)
+            for asset in all_gt_assets:
+                if asset in all_pred_assets:
+                    pred_recall.append(1)
+                else:
+                    pred_recall.append(0)
+            
+            if np.mean(pred_prec) == 0 and np.mean(pred_recall) == 0:
+                pred_f1 = 0
+            else:
+                pred_f1 = 2*np.mean(pred_prec)*np.mean(pred_recall)/(np.mean(pred_prec)+np.mean(pred_recall))
+            self.object_finegrain_accuracy.append(pred_f1)
+                
             
             for obj in gt_objs:
                 obj_class = self.assetdesc_to_obj[obj][0][0]
@@ -1293,11 +1346,11 @@ class HouseNatLanguageSemSimSelectedGPT4:
             print(gt_house_text)
         self.gt_house_jsons.append(gt_house_dict)
         
-        self.selected_objs.append(gt['objs_present'])
+        # self.selected_objs.append(gt['objs_present'])
         
     
     def compute(self):
-        for pred_house, gt_house, selected_objs in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons, self.selected_objs)):
+        for pred_house, gt_house in tqdm.tqdm(zip(self.house_jsons, self.gt_house_jsons,)):
             if pred_house is None:
                 self.json_accuracy.append(0)
                 continue
@@ -1338,7 +1391,7 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 gt_objs[obj_desc].append((obj_loc, [0, 0, 0], obj_desc))
                 i += 1
             
-            selected_objs = [objid_to_class[obj] for obj in selected_objs]
+            #selected_objs = [objid_to_class[obj] for obj in selected_objs]
             pred_objs = defaultdict(list)
             
             for obj_desc in pred_house:
@@ -1378,7 +1431,7 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
                 pred_obj_classes[obj_class].extend(pred_objs[obj])
             
-            selected_obj_classes = selected_objs
+            #selected_obj_classes = selected_objs
             
             pred_locations = {}
             gt_locations = defaultdict(list)
@@ -1388,13 +1441,13 @@ class HouseNatLanguageSemSimSelectedGPT4:
                 except:
                     pdb.set_trace()
                 if obj_class in pred_obj_classes:
-                    if obj_class in selected_obj_classes:
-                        self.object_class_accuracy.append(1)
-                        pred_locations[obj_class] = pred_obj_classes[obj_class]
-                        gt_locations[obj_class].extend(gt_objs[obj])
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(1)
+                    pred_locations[obj_class] = pred_obj_classes[obj_class]
+                    gt_locations[obj_class].extend(gt_objs[obj])
                 else:
-                    if obj_class in selected_obj_classes:
-                        self.object_class_accuracy.append(0)
+                    # if obj_class in selected_obj_classes:
+                    self.object_class_accuracy.append(0)
             
             # pdb.set_trace()
             # compute hungarian matching of predicted object locations to gt object locations
@@ -1404,34 +1457,56 @@ class HouseNatLanguageSemSimSelectedGPT4:
 
                 # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
                 mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
-                if obj in selected_obj_classes:
-                    self.object_location_accuracy.append(accuracy)
-                    self.object_location_error.append(mean_dist/max_dimension)
-                    self.object_pose_accuracy.append(pose_accuracy)
-                    self.object_pose_error.append(mean_pose_dist)
-                    self.object_attr_similarity.append(attr_sim)
+                # if obj in selected_obj_classes:
+                self.object_location_accuracy.append(accuracy)
+                self.object_location_error.append(mean_dist/max_dimension)
+                self.object_pose_accuracy.append(pose_accuracy)
+                self.object_pose_error.append(mean_pose_dist)
+                self.object_attr_similarity.append(attr_sim)
+            all_gt_assets = []
+            for obj in gt_objs:
+                gt_obj = self.assetdesc_to_obj[obj]
+                gt_assets = [obj[1] for obj in gt_obj]
+                all_gt_assets.extend(gt_assets)
+
+            all_pred_assets = []
+            for obj in pred_objs:
+                pred_obj = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)
+                pred_assets = [obj[1] for obj in pred_obj]
+                all_pred_assets.extend(pred_assets)
+
+            pred_prec = []
+            pred_recall = []
+            for asset in all_pred_assets:
+                if asset in all_gt_assets:
+                    pred_prec.append(1)
+                else:
+                    pred_prec.append(0)
+            for asset in all_gt_assets:
+                if asset in all_pred_assets:
+                    pred_recall.append(1)
+                else:
+                    pred_recall.append(0)
+            
+            if np.mean(pred_prec) == 0 and np.mean(pred_recall) == 0:
+                pred_f1 = 0
+            else:
+                pred_f1 = 2*np.mean(pred_prec)*np.mean(pred_recall)/(np.mean(pred_prec)+np.mean(pred_recall))
+            self.object_finegrain_accuracy.append(pred_f1)
             
             for obj in gt_objs:
                 obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
-                if obj_class in selected_obj_classes:
-                    if obj in pred_objs:
-                        self.object_finegrain_accuracy.append(1)
+                # if obj_class in selected_obj_classes:
+                if obj in pred_objs:
+                    count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
+                    self.object_count_error.append(count_diff)
+                    if count_diff == 0:
+                        self.object_count_acc.append(1)
                     else:
-                        self.object_finegrain_accuracy.append(0)
-            
-            for obj in gt_objs:
-                obj_class = get_obj_class_from_desc_pred(obj, self.assetdesc_to_obj, self.attrmodel, self.attrtokenizer)[0][0]
-                if obj_class in selected_obj_classes:
-                    if obj in pred_objs:
-                        count_diff = abs(len(gt_objs[obj]) - len(pred_objs[obj]))
-                        self.object_count_error.append(count_diff)
-                        if count_diff == 0:
-                            self.object_count_acc.append(1)
-                        else:
-                            self.object_count_acc.append(0)
-                    else:
-                        self.object_count_error.append(len(gt_objs[obj]))
                         self.object_count_acc.append(0)
+                else:
+                    self.object_count_error.append(len(gt_objs[obj]))
+                    self.object_count_acc.append(0)
 
         # pdb.set_trace()
         if len(self.object_location_accuracy) == 0:
@@ -1733,7 +1808,7 @@ class QAAccuracy:
                 except:
                     format_answer = pred_answers.split("###")[0].strip().lower()
             else:
-                format_answer = pred_answers.split("###")[0].strip().lower()
+                format_answer = pred_answers.split("###")[0].strip().lower().split(".")[0]
 
         # pdb.set_trace()
         format_answer_words = [format_answer,]
@@ -1804,9 +1879,12 @@ class QAAccuracy:
 
         
     def compute(self):
-        
-        with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
-            json.dump(self.outputs, f)
+        try:
+            with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+                json.dump(self.outputs, f)
+        except:
+            print("Error in saving output json")
+            pass
 
         # acc by data name
         data_accs = {}
@@ -1929,8 +2007,12 @@ class ReasoningAccuracy:
         
     def compute(self):
         
-        with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
-            json.dump(self.outputs, f)
+        try:
+            with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+                json.dump(self.outputs, f)
+        except:
+            print("Error in saving output json")
+            pass
 
         # overall acc
         acc = np.mean(self.accs)

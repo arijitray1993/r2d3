@@ -50,7 +50,9 @@ def compute_metrics_from_json_gpt_simpl(json_file, logger):
     args['logger'] = logger
     accs = eval_funcs.HouseNatLanguageSemSimSelectedGPT4(args)
 
-    for entry in data:
+    for ind, entry in enumerate(data):
+        if ind>500:
+            break
         # pdb.set_trace()
         prompt = entry['prompt']
         text_labels = [entry["text_label"],]
@@ -85,7 +87,6 @@ def compute_metrics_from_json(json_file, logger):
         output, gt_house_json, gt_house_dict, gt_text_labels = entry
         
         text_labels = [gt_text_labels,]
-        
 
         gt_dict = {}
         gt_dict['text_labels'] = text_labels
@@ -100,15 +101,15 @@ def compute_metrics_from_json(json_file, logger):
 
 if __name__=="__main__":
     
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_attr_campolygonangle_onlyyuvdepth/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses_randomobjpoint_updated.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()
     run = wandb.init(project=exp_name)
     logger = run
     
-    compute_metrics_from_json(json_file, logger)
-    #compute_metrics_from_json_gpt_simpl(json_file, logger)
+    #compute_metrics_from_json(json_file, logger)
+    compute_metrics_from_json_gpt_simpl(json_file, logger)
 
     # compute_image_caption_metrics(json_file, logger, eval_caption_sim=False)
     

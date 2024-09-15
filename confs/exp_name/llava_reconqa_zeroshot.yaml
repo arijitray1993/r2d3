@@ -1,6 +1,6 @@
 exp_name: llava_reconqa_zeroshot
 device: 'gpu'
-num_workers: 4
+num_workers: 0
 
 
 ### loading checkpoints, eval, train options

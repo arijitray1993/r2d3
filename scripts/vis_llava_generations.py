@@ -1,3 +1,4 @@
+from collections import defaultdict
 import prior
 from ai2thor.controller import Controller
 from PIL import Image
@@ -15,6 +16,7 @@ from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
 import yaml
 import ast
+from transformers import AutoTokenizer, AutoModel
 
 import sys
 sys.path.append("../")
@@ -53,7 +55,7 @@ def get_top_down_frame(controller):
     return Image.fromarray(top_down_frame)
 
 
-def generate_output_houses(json_path, generate_explanation=False):
+def generate_output_houses(json_path, generate_explanation=False, use_language=False, assetdesc_to_obj=None, attrtokenizer=None, attrmodel=None):
 
     output_json = json.load(open(json_path, 'r'))
     image_save_folder = json_path.replace("output.json", "gen_images")
@@ -77,13 +79,16 @@ def generate_output_houses(json_path, generate_explanation=False):
         room_json_text = room_json_text.replace("(", "[")
         room_json_text = room_json_text.replace(")", "]")
         # pdb.set_trace()
-    
+        print(room_json_text)
 
-        try:
+        #try:
+        if use_language:
+            house_json = ai2thor_utils.make_house_from_cfg_language(room_json_text, attrmodel, attrtokenizer, assetdesc_to_obj)
+        else:
             house_json = ai2thor_utils.make_house_from_cfg(room_json_text)
-        except:
-            print("not a valid house json")
-            continue
+        #except:
+        #    print("not a valid house json")
+        #    continue
         house_json = house_json.house_json
         try:
             controller = Controller(width=800, height=800, quality="High WebGL", scene="Procedural", gridSize=0.1) # renderInstanceSegmentation=True)
@@ -91,7 +96,7 @@ def generate_output_houses(json_path, generate_explanation=False):
         except:
             print("not a valid house json")
 
-        
+        pdb.set_trace()
         controller.step(
             action="RandomizeLighting",
             brightness=(1.5, 2),
@@ -208,6 +213,7 @@ def generate_output_houses(json_path, generate_explanation=False):
                         continue      
 
                     event = controller.step(action="Teleport", position=position, rotation=rotation)
+                    pdb.set_trace()
                     if event.metadata["lastActionSuccess"]:
                         success = 1
                     else:
@@ -281,7 +287,7 @@ def generate_output_houses(json_path, generate_explanation=False):
         plt.savefig(f"{format_results_folder}/example_{room_ind}.png")
         plt.close()
 
-        pdb.set_trace()
+        # pdb.set_trace()
         if generate_explanation:
             gt_program_text = ai2thor_utils.generate_program_from_roomjson(gt_house_json)
             failure_sentence = f"To generate a room that looks like this image: <image>, the predicted program was {room_json_text}. This generated a room with top-down view like this image: <image>. The refined program would be: {gt_program_text}"
@@ -301,5 +307,23 @@ def generate_output_houses(json_path, generate_explanation=False):
             json.dump(failure_explanations, f)
 
 if __name__=="__main__":
+    use_language = True
+    
+    if use_language:
+        assetdesc_to_obj = defaultdict(list)
+        asset_descs = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json"))
+        
+        for asset in asset_descs:
+            entries = asset_descs[asset]
+            for im, obj, desc in entries:
+                assetdesc_to_obj[desc].append((obj, asset))
 
-    generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_caption_campolygon_orientlanguage/output.json", generate_explanation=False)
+            
+        attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
+        attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
+
+        generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_anyimage_test/output.json", generate_explanation=False, use_language=True, assetdesc_to_obj=assetdesc_to_obj, attrtokenizer=attrtokenizer, attrmodel=attrmodel)
+
+    else:
+        generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_caption_campolygon_orientlanguage/output.json", generate_explanation=False)
+    

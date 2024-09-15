@@ -82,7 +82,7 @@ if __name__=="__main__":
 
         prompt = prompt.split("Human: Answer in natural language.")[-1].split("###Assistant")[0]
 
-        # pdb.set_trace()
+        pdb.set_trace()
 
         response = get_caption(image_path, prompt, api_key)
 

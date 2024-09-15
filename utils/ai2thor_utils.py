@@ -7,6 +7,8 @@ import ast
 import pdb
 import random
 import numpy as np
+import torch.nn.functional as F
+import ast
 
 def tokenize_polygon(polygon, max_dim_x, max_dim_y, max_dim_z):
     # get the tokens for the x,y,z coordinates of the polygon
@@ -996,5 +998,111 @@ def make_house_from_cfg(cfg):
             i += 1
         else:
             break
+
+    return house
+
+def get_obj_from_desc_pred(obj_desc, known_desc_to_class, attrmodel, attrtokenizer):
+    obj_desc = obj_desc.lower()
+    known_descs = list(known_desc_to_class.keys())
+    all_descs = [obj_desc,] + known_descs
+
+    # compute the highest similarity to known descriptions
+    batch_dict = attrtokenizer(all_descs, max_length=512, padding=True, truncation=True, return_tensors='pt')
+
+    batch_dict = {k: v.cuda() for k, v in batch_dict.items()}
+
+    outputs = attrmodel(**batch_dict)
+    embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
+
+    # normalize embeddings
+    embeddings = F.normalize(embeddings, p=2, dim=1)
+    scores = (embeddings[:1] @ embeddings[1:].T)
+    
+    max_score_ind = scores.argmax().item()
+
+    best_known_desc= known_descs[max_score_ind]
+
+    return known_desc_to_class[best_known_desc]
+
+def average_pool(last_hidden_states, attention_mask):
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+
+def make_house_from_cfg_language(cfg, attrmodel, attrtokenizer, known_desc_to_class):
+    '''
+    cfg is a string like:
+    polygon: [[358, 0, 358], [358, 0, 894], [894, 0, 894], [894, 0, 0], [536, 0, 0], [536, 0, 358]]
+    floor_material: 'WoodFineDarkFloorsRedNRM1'
+    wall_material: ['PureWhite', 'PureWhite', 'PureWhite', 'PureWhite', 'PureWhite', 'PureWhite'] # the wall ids are in order of the polygon points 0 to n.
+
+    obj_0: ['TV_Stand_206_3', [861, 38, 63], [0, 270, 0]] # asset id, position, rotation
+    obj_1: ['Cart_1', [636, 64, 666], [0, 0, 0]]
+    obj_2: ['Dining_Table_221_1', [852, 39, 802], [0, 270, 0]]
+    obj_3: ['RoboTHOR_sofa_vreta', [579, 36, 91], [0, 90, 0]]
+    obj_4: ['Wall_Decor_Photo_1V', [892, 161, 863], [0, 270, 0]]
+    obj_5: ['Wall_Decor_Photo_1', [892, 191, 137], [0, 270, 0]]
+    window_0: ['Window_Hung_48x24', [101, 150, 0], [[40, 117, 0], [162, 183, 0]], 5] # assetid, position, window polygon, wallid
+
+    outputs a room (not a house really) json that can be used with the Controller in AI2thor. 
+    '''
+
+    # get dictionary from yaml-like string
+    cfg_dict = yaml.load(cfg, Loader=yaml.FullLoader)
+
+    # get max dimensions
+    floor_polygon = cfg_dict['polygon']
+    floor_material = cfg_dict['floor_material']
+    wall_material = cfg_dict['wall_material']
+
+    # make house
+    house = House()
+    house.make_floorplan_walls({
+        'polygon': floor_polygon,
+        'floor_material': floor_material,
+        'wall_material': wall_material
+    })
+
+    # make windows
+    i = 0
+    while(True):
+        if f'window_{i}' in cfg_dict:
+            window = cfg_dict[f'window_{i}']
+            house.add_window({
+                'assetId': window[0],
+                'position': window[1],
+                'windowPolygon': window[2],
+                'id': f'window_{i}',
+                'wall': window[3],
+                'wall_exterior': f'exterior_{window[3]}'
+            })
+            i += 1
+        else:
+            break
+    # print(f"made {i} windows")
+
+    # get obj0, obj1, ... until we run out of objects in dict
+    i = 0
+    while(True):
+        if f'obj_{i}' in cfg_dict:
+            obj = cfg_dict[f'obj_{i}']
+            
+            obj_desc = obj.split(" at location ")[0].strip()
+            obj_position = obj.split(" at location ")[1].split(" with rotation ")[0].strip()
+            obj_rotation = obj.split(" with rotation ")[1].strip()
+            
+            #retrieve closest assetid
+            obj_assetid = get_obj_from_desc_pred(obj_desc, known_desc_to_class, attrmodel, attrtokenizer)[0][1]
+
+            house.add_object({
+                'assetId': obj_assetid,
+                'position': ast.literal_eval(obj_position),
+                'rotation': ast.literal_eval(obj_rotation),
+                'id': f'obj_{i}'
+            })
+            i += 1
+        else:
+            break
+    # print(f"made {i} objects")
 
     return house

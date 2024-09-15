@@ -114,9 +114,9 @@ if __name__ == "__main__":
     
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
     qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation/'
-    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
-    vis = True
-    stats = True
+    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_split2.json'
+    vis = False
+    stats = False
     generate = True
 
     if generate:
@@ -137,14 +137,11 @@ if __name__ == "__main__":
 
         all_im_qas = []
         
-        all_im_qas = json.load(open(qa_json_path, "r"))
+        # all_im_qas = json.load(open(qa_json_path, "r"))
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
-            if house_ind < 955:
+            if house_ind < 5000:
                 continue
-            
-            if house_ind > 5000:
-                break
             house_json = house
 
             try:

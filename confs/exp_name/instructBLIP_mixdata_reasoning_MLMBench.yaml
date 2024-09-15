@@ -15,7 +15,7 @@ load_checkpoint: False
 gradient_accumulation_steps: 8
 num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/instructBLIP_mixdata_reasoning/stoic-waterfall-9_105000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/instructBLIP_mixdata_reasoning/stoic-waterfall-9_200000
 
 eval_every: 5000
 num_eval_steps: 5000

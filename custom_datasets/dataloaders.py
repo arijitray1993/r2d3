@@ -31,6 +31,7 @@ import cv2
 import sys
 # sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
 sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
+# sys.path.append("models/LLaVA_modified/LLaVA")
 from llava.mm_utils import (
     process_images,
     tokenizer_image_token,
@@ -596,7 +597,6 @@ class LLaVAInstructTune(Dataset):
 
     def collate_fn(self, batch):
         image_paths, imgs, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
-
         new_images = []
         for image_b in imgs:
             for image in image_b:
@@ -647,7 +647,7 @@ class ProcTHOR_reasoning(Dataset):
         #nav_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
 
         if args.get("split") == "train":
-            spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_train.json'
+            spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_v2_train.json'
             
         else:
             spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_val.json'
@@ -889,7 +889,7 @@ class ProcTHOR_recon_qa(Dataset):
 
         images = [Image.open(image_path[0]).convert("RGB"),]
 
-        # pdb.set_trace()
+        pdb.set_trace()
         return image_path, images, prompt, text_label, answer, answer_choices, "procthor_recon_qa"
 
     def __len__(self):
@@ -966,6 +966,98 @@ class ProcTHOR_recon_qa(Dataset):
 
         return return_dict
 
+
+class AnyImageCaption(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+       
+        self.batch_decode = self.tokenizer.batch_decode
+
+        self.image_data_path = args['image_data_path']
+        
+        self.data = []
+        for image_path in os.listdir(self.image_data_path):
+            if ".jpeg" in image_path or ".jpg" in image_path or ".png" in image_path:
+                self.data.append(os.path.join(self.image_data_path, image_path))
+            # self.data.append(os.path.join(self.image_data_path, image_path))
+
+        self.polygons = {
+            'bedroom_1': [(0, 0, 0), (0, 0, 600), (600, 0, 600), (600, 0, 0)],
+            'bedroom_2': [(0, 0, 0), (0, 0, 600), (400, 0, 600), (400, 0, 0)],
+            'bedroom_3': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+            'living_room_1': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+            'living_room_2': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+            'living_room_3': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+            'toilet_1': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (400, 0, 0)],
+            'toilet_2': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+            'dalle_livingroom': [(0, 0, 0), (0, 0, 400), (600, 0, 400), (600, 0, 0)],
+        }
+
+        self.cams = {
+            'bedroom_1': (300, 300),
+            'bedroom_2': (30, 30),
+            'bedroom_3': (300, 300),
+            'living_room_1': (300, 300),
+            'living_room_2': (300, 300),
+            'living_room_3': (300, 300),
+            'toilet_1': (300, 300),
+            'toilet_2': (20, 20),
+            'dalle_livingroom': (300, 300),
+        }
+        self.args = args
+
+    def __getitem__(self, idx):
+       
+        image_path = self.data[idx]
+        
+        image = Image.open(image_path).convert("RGB")
+
+        room_type = image_path.split("/")[-1].split(".")[0]
+        format_polygon_coords = str(self.polygons[room_type])
+        camera_prompt = f"Image taken from (x,z) {self.cams[room_type]}."
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prompt = f"Answer in a structured JSON format. <image> The room polygon is (x,z) {format_polygon_coords}. {camera_prompt} Plausible 3D coordinates (x, y,z) for the rest of the room: \n"
+        
+        return [image_path, ], image, prompt
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def collate_fn(self, batch):
+        im_files, images, prompts = zip(*batch)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        input_ids = torch.stack(input_ids, dim=0)
+        attention_mask = torch.stack(attention_mask, dim=0)
+        
+        new_images = []
+        for image in images:
+            image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+            image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+            new_images.append(image)
+        
+        pixel_values = torch.stack(new_images, dim=0)
+
+        # pixel_values = self.image_processor(images, return_tensors="pt")['pixel_values']
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": input_ids,
+            "pixel_values": pixel_values,
+            "program_texts": prompts,
+            "text_labels": prompts,
+            "image_lists": im_files,
+        }
+
+        return return_dict
 
 
 class ProcTHOR_image_camposition_marked(Dataset):
@@ -2117,22 +2209,21 @@ class AllMLMBench(Dataset):
         self.image_processor = image_processor
         if tokenizer is not None:
             self.batch_decode = self.tokenizer.batch_decode
-        
+
         if args.get("instructBLIP") or args.get("BLIP2"):
             self.batch_decode = self.image_processor.batch_decode
 
-        self.all_data =[
+        self.all_data = [
             CVBench(args, tokenizer, image_processor),
             BLINK(args, tokenizer, image_processor),
         ]
-        
-    
+
     def __getitem__(self, idx):
         if idx < len(self.all_data[0]):
             return self.all_data[0][idx]
         else:
             return self.all_data[1][idx - len(self.all_data[0])]
-    
+
     def __len__(self):
         total_len = 0
         for data in self.all_data:
@@ -2141,4 +2232,3 @@ class AllMLMBench(Dataset):
 
     def collate_fn(self, batch):
         return self.all_data[0].collate_fn(batch)
-

@@ -120,13 +120,13 @@ if __name__ == "__main__":
     
     split="train"
     if split == "train":
-        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial_new/'
-        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_split1.json'
+        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial_new_v2/'
+        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_split_v2.json'
     else:
-        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial_new_{split}/'
-        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_{split}.json'
+        qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/spatial_new_{split}_v2/'
+        qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_{split}_v2.json'
     
-    html_vis_file = '/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/3d_spatial_qas_new.html'
+    html_vis_file = '/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/3d_spatial_qas_new_v2.html'
     generate=True
     vis=False
     
@@ -150,10 +150,12 @@ if __name__ == "__main__":
             assetid2desc[asset] = random.choice(captions)
 
         dataset = prior.load_dataset("procthor-10k")
-        all_im_qas = []
-        # all_im_qas = json.load(open(qa_json_path, "r"))
+        #all_im_qas = []
+        all_im_qas = json.load(open(qa_json_path, "r"))
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
+            if house_ind<2700:
+                continue
             if house_ind>=5000:
                 break
             
@@ -213,7 +215,7 @@ if __name__ == "__main__":
             for cam_pos, cam_rot, _ in random_positions[:1]:
                 qa_pair_choices = []
                 try:
-                    controller = Controller(scene=house_json, width=1024, height=1024, quality="Ultra", renderInstanceSegmentation=True, platform=CloudRendering)
+                    controller = Controller(scene=house_json, width=512, height=512, quality="Ultra", renderInstanceSegmentation=True, platform=CloudRendering)
                 except:
                     print("Cannot render environment, continuing")
                     # pdb.set_trace()
@@ -293,6 +295,41 @@ if __name__ == "__main__":
                 another_obj_2_cnt = objdesc2cnt[objid2info[another_obj_2][1]]
                 another_obj_2_pos = objid2info[another_obj_2][3]
 
+                if random.random() < 0.5:
+                    if mark_AB:
+                        obj_desc = f"{obj_desc} (marked A)"
+                        another_obj_desc = f"{another_obj_desc} (marked B)"
+                        another_obj_2_desc = f"{another_obj_2_desc} (marked C)"
+                    else:
+                        obj_desc = f"{obj_desc} (highlighted by a red box)"
+                        another_obj_desc = f"{another_obj_desc} (highlighted by a blue box)"
+                        another_obj_2_desc = f"{another_obj_2_desc} (highlighted by a green box)"
+                else:
+                    if obj_desc == another_obj_desc:
+                        if mark_AB:
+                            obj_desc = f"{obj_desc} (marked A)"
+                            another_obj_desc = f"{another_obj_desc} (marked B)"
+                        else:
+                            obj_desc = f"{obj_desc} (highlighted by a red box)"
+                            another_obj_desc = f"{another_obj_desc} (highlighted by a blue box)"
+                    
+                    if obj_desc == another_obj_2_desc:
+                        if mark_AB:
+                            obj_desc = f"{obj_desc} (marked A)"
+                            another_obj_2_desc = f"{another_obj_2_desc} (marked C)"
+                        else:
+                            obj_desc = f"{obj_desc} (highlighted by a red box)"
+                            another_obj_2_desc = f"{another_obj_2_desc} (highlighted by a green box)"
+                    
+                    if another_obj_desc == another_obj_2_desc:
+                        if mark_AB:
+                            another_obj_desc = f"{another_obj_desc} (marked B)"
+                            another_obj_2_desc = f"{another_obj_2_desc} (marked C)"
+                        else:
+                            another_obj_desc = f"{another_obj_desc} (highlighted by a blue box)"
+                            another_obj_2_desc = f"{another_obj_2_desc} (highlighted by a green box)"
+
+
                 # this is to normalize the camera to 0 angle. 
                 new_pos = cam_pos
                 new_rot = cam_rot
@@ -311,7 +348,7 @@ if __name__ == "__main__":
                 
 
                 #### count questions ####
-                question = f"How many {obj1_type} are visible in the scene?"
+                question = f"How many {obj1_type}s are visible in the scene?"
                 answer = f"{obj1_cnt}"
                 incorrect_answer = f"{obj1_cnt - random.choice(range(1, obj1_cnt+1))}"
                 incorrect_answer_2 = f"{obj1_cnt + 3}"
@@ -322,7 +359,7 @@ if __name__ == "__main__":
                 image_order = (new_path_init,)
                 qa_pair_choices.append((question, image_order, answer_choices))
 
-                question = f"How many {objid2info[another_obj][1]} are visible in the scene?"
+                question = f"How many {objid2info[another_obj][1]}s are visible in the scene?"
                 answer = f"{another_obj_cnt}"
                 incorrect_answer = f"{obj1_cnt - random.choice(range(1, obj1_cnt+1))}"
                 incorrect_answer_2 = f"{obj1_cnt + 3}"
@@ -334,7 +371,7 @@ if __name__ == "__main__":
                 qa_pair_choices.append((question, image_order, answer_choices))
 
             
-                question = f"How many {objid2info[another_obj_2][1]} are visible in the scene?"
+                question = f"How many {objid2info[another_obj_2][1]}s are visible in the scene?"
                 answer = f"{another_obj_2_cnt}"
                 incorrect_answer = f"{obj1_cnt - random.choice(range(1, obj1_cnt+1))}"
                 incorrect_answer_2 = f"{obj1_cnt + 3}"
@@ -359,7 +396,7 @@ if __name__ == "__main__":
                         answer = "B"
                         incorrect_answer = "A"
                     else:
-                        question = f"Which object is closer to the camera taking this photo, {obj_desc} (highlighted by a red box)  or {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Which object is closer to the camera taking this photo, {obj_desc} or {another_obj_desc}?"
                         answer = f"{another_obj_desc}"
                         incorrect_answer = f"{obj_desc}"
                     answer_choices = (answer, incorrect_answer)
@@ -367,10 +404,15 @@ if __name__ == "__main__":
                     qa_pair_choices.append((question, image_order, answer_choices))
                     
                     if mark_AB:
-                        question = f"Is {obj_desc} (marked A) further away or in front of {another_obj_desc} (marked B)?"
+                        if random.random() < 0.5:
+                            question = f"Is {obj_desc} behind {another_obj_desc}?"
+                            answer_choices = ("yes", "no")
+                        else:
+                            question = f"Is {obj_desc} in front of {another_obj_desc}?"
+                            answer_choices = ("no", "yes")
                     else:
-                        question = f"Is {obj_desc} (highlighted by a red box) further away or in front of {another_obj_desc} (highlighted by a blue box)?"
-                    answer_choices = ("further away", "in front")
+                        question = f"Is {obj_desc} further away or in front of {another_obj_desc}?"
+                        answer_choices = ("further away", "in front")
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
 
@@ -381,7 +423,7 @@ if __name__ == "__main__":
                         answer = "A"
                         incorrect_answer = "B"
                     else:
-                        question = f"Which object is closer to the camera taking this photo, {obj_desc} (highlighted by a red box)  or {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Which object is closer to the camera taking this photo, {obj_desc} or {another_obj_desc}?"
                         answer = f"{obj_desc}"
                         incorrect_answer = f"{another_obj_desc}"
                     answer_choices = (answer, incorrect_answer)
@@ -389,10 +431,15 @@ if __name__ == "__main__":
                     qa_pair_choices.append((question, image_order, answer_choices))
 
                     if mark_AB:
-                        question = f"Is {obj_desc} (marked A) further away or in front of {another_obj_desc} (marked B)?"
+                        if random.random() < 0.5:
+                            question = f"Is {obj_desc} behind {another_obj_desc}?"
+                            answer_choices = ("no", "yes")
+                        else:
+                            question = f"Is {obj_desc} in front of {another_obj_desc}?"
+                            answer_choices = ("yes", "no")
                     else:
-                        question = f"Is {obj_desc} (highlighted by a red box) further away or in front of {another_obj_desc} (highlighted by a blue box)?"
-                    answer_choices = ("in front", "further away")
+                        question = f"Is {obj_desc} further away or in front of {another_obj_desc}?"
+                        answer_choices = ("in front", "further away")
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
                 
@@ -403,7 +450,7 @@ if __name__ == "__main__":
                         answer = "C"
                         incorrect_answer = "B"
                     else:
-                        question = f"Which object is closer to the camera taking this photo, {another_obj_desc} (highlighted by a blue box)  or {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Which object is closer to the camera taking this photo, {another_obj_desc} or {another_obj_2_desc}?"
                         answer = f"{another_obj_2_desc}"
                         incorrect_answer = f"{another_obj_desc}"
                     answer_choices = (answer, incorrect_answer)
@@ -415,7 +462,7 @@ if __name__ == "__main__":
                         answer = "B"
                         incorrect_answer = "C"
                     else:
-                        question = f"Which object is closer to the camera taking this photo, {another_obj_desc} (highlighted by a blue box)  or {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Which object is closer to the camera taking this photo, {another_obj_desc} or {another_obj_2_desc}?"
                         answer = f"{another_obj_desc}"
                         incorrect_answer = f"{another_obj_2_desc}"
                     answer_choices = (answer, incorrect_answer)
@@ -434,22 +481,35 @@ if __name__ == "__main__":
                     direction = "right"
                     wrong_direction = "left"
                     if mark_AB:
-                        question = f"Considering the relative positions, where is {obj_desc} (near mark A) with respect to {another_obj_desc} (near mark B)?"
+                        question = f"Where is {obj_desc} with respect to {another_obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {obj_desc} (highlighted by a red box) with respect to {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Considering the relative positions, where is {obj_desc} with respect to {another_obj_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
                     )
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
+
+                    if mark_AB:
+                        if random.random() < 0.5:
+                            question = f"Is {obj_desc} to the left of {another_obj_desc}?"
+                            answer_choices = ("yes", "no")
+                            image_order = (new_path_init_marked,)
+                            qa_pair_choices.append((question, image_order, answer_choices))
+                        else:
+                            question = f"Is {obj_desc} to the right of {another_obj_desc}?"
+                            answer_choices = ("no", "yes")
+                            image_order = (new_path_init_marked,)
+                            qa_pair_choices.append((question, image_order, answer_choices))
+                    
                 elif another_obj_rotated_pos[0] < obj1_rotated_pos[0]:
                     direction = "left"
                     wrong_direction = "right"
                     if mark_AB:
-                        question = f"Considering the relative positions, where is {obj_desc} (near mark A) with respect to {another_obj_desc} (near mark B)?"
+                        question = f"Considering the relative positions, where is {obj_desc} with respect to {another_obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {obj_desc} (highlighted by a red box) with respect to {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Considering the relative positions, where is {obj_desc} with respect to {another_obj_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
@@ -463,9 +523,9 @@ if __name__ == "__main__":
                     direction = "right"
                     wrong_direction = "left"
                     if mark_AB:
-                        question = f"Considering the relative positions, where is {another_obj_desc} (near mark B) with respect to {another_obj_2_desc} (near mark C)?"
+                        question = f"Considering the relative positions, where is {another_obj_desc} with respect to {another_obj_2_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {another_obj_desc} (highlighted by a blue box) with respect to {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Considering the relative positions, where is {another_obj_desc} with respect to {another_obj_2_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
@@ -476,15 +536,27 @@ if __name__ == "__main__":
                     direction = "left"
                     wrong_direction = "right"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_desc} (near mark B) to the left or right of {another_obj_2_desc} (near mark C)?"
+                        question = f"Considering the relative positions, is {another_obj_desc} to the left or right of {another_obj_2_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {another_obj_desc} (highlighted by a blue box) with respect to {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Considering the relative positions, where is {another_obj_desc} with respect to {another_obj_2_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
                     )
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
+
+                    if mark_AB:
+                        if random.random() < 0.5:
+                            question = f"Is {another_obj_desc} to the right of {another_obj_2_desc}?"
+                            answer_choices = ("yes", "no")
+                            image_order = (new_path_init_marked,)
+                            qa_pair_choices.append((question, image_order, answer_choices))
+                        else:
+                            question = f"Is {another_obj_desc} to the left of {another_obj_2_desc}?"
+                            answer_choices = ("no", "yes")
+                            image_order = (new_path_init_marked,)
+                            qa_pair_choices.append((question, image_order, answer_choices))
                 
 
                 # between A and C
@@ -492,9 +564,9 @@ if __name__ == "__main__":
                     direction = "right"
                     wrong_direction = "left"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {obj_desc} (near mark A) to the left or right of {another_obj_2_desc} (near mark C)?"
+                        question = f"Considering the relative positions, is {obj_desc} to the left or right of {another_obj_2_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {obj_desc} (highlighted by a red box) with respect to {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Considering the relative positions, where is {obj_desc} with respect to {another_obj_2_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
@@ -505,15 +577,21 @@ if __name__ == "__main__":
                     direction = "left"
                     wrong_direction = "right"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {obj_desc} (near mark A) to the left or right of {another_obj_2_desc} (near mark C)?"
+                        question = f"Considering the relative positions, is {obj_desc} to the left or right of {another_obj_2_desc}?"
                     else:
-                        question = f"Considering the relative positions, where is {obj_desc} (highlighted by a red box) with respect to {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Considering the relative positions, where is {obj_desc} with respect to {another_obj_2_desc}?"
                     answer_choices = (
                         f"{wrong_direction}", # wrong direction is the correct one here, fix later
                         f"{direction}",
                     )
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
+
+                # touching questions:
+                # chack parents of the objects
+                # todo
+
+
 
                 ### above below questions
 
@@ -522,9 +600,9 @@ if __name__ == "__main__":
                     direction_ab = "above"
                     wrong_direction_ab = "below"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_desc} (near mark B) above or below {obj_desc} (near mark A)?"
+                        question = f"Considering the relative positions, is {another_obj_desc} above or below {obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_desc} (highlighted by a blue box) above or below {obj_desc} (highlighted by a red box)?"
+                        question = f"Considering the relative positions, where is {another_obj_desc} with respect to {obj_desc}?"
                         
                     answer = f"{direction_ab}"
                     incorrect_answer = f"{wrong_direction_ab}"
@@ -535,9 +613,9 @@ if __name__ == "__main__":
                     direction_ab = "below"
                     wrong_direction_ab = "above"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_desc} (near mark B) above or below {obj_desc} (near mark A)?"
+                        question = f"Considering the relative positions, is {another_obj_desc} above or below {obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_desc} (highlighted by a blue box) above or below {obj_desc} (highlighted by a red box)?"
+                        question = f"Considering the relative positions, where is {another_obj_desc} with respect to {obj_desc}?"
                         
                     answer = f"{direction_ab}"
                     incorrect_answer = f"{wrong_direction_ab}"
@@ -551,9 +629,9 @@ if __name__ == "__main__":
                     direction_bc = "above"
                     wrong_direction_bc = "below"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (near mark C) above or below {another_obj_desc} (near mark B)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {another_obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (highlighted by a green box) above or below {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Considering the relative positions, where is {another_obj_2_desc} with respect to {another_obj_desc}?"
                     
                     answer = f"{direction_bc}"
                     incorrect_answer = f"{wrong_direction_bc}"
@@ -564,9 +642,9 @@ if __name__ == "__main__":
                     direction_bc = "below"
                     wrong_direction_bc = "above"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (near mark C) above or below {another_obj_desc} (near mark B)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {another_obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (highlighted by a green box) above or below {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Considering the relative positions, where is {another_obj_2_desc} with respect to {another_obj_desc}?"
                     
                     answer = f"{direction_bc}"
                     incorrect_answer = f"{wrong_direction_bc}"
@@ -581,9 +659,9 @@ if __name__ == "__main__":
                     direction_ac = "above"
                     wrong_direction_ac = "below"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (near mark C) above or below {obj_desc} (near mark A)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (highlighted by a green box) above or below {obj_desc} (highlighted by a red box)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {obj_desc}?"
                     
                     answer = f"{direction_ac}"
                     incorrect_answer = f"{wrong_direction_ac}"
@@ -594,9 +672,9 @@ if __name__ == "__main__":
                     direction_ac = "below"
                     wrong_direction_ac = "above"
                     if mark_AB:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (near mark C) above or below {obj_desc} (near mark A)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {obj_desc}?"
                     else:
-                        question = f"Considering the relative positions, is {another_obj_2_desc} (highlighted by a green box) above or below {obj_desc} (highlighted by a red box)?"
+                        question = f"Considering the relative positions, is {another_obj_2_desc} above or below {obj_desc}?"
                     
                     answer = f"{direction_ac}"
                     incorrect_answer = f"{wrong_direction_ac}"
@@ -604,15 +682,15 @@ if __name__ == "__main__":
                     image_order = (new_path_init_marked,)
                     qa_pair_choices.append((question, image_order, answer_choices))
 
-                
+
                 # above below based on 3d height and not 2d position in the image
 
                 #between A and B
                 if objid2info[obj1][3][1] > another_obj_pos[1]:
                     if mark_AB:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} (marked A) at a higher height than {another_obj_desc} (marked B)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} at a higher height than {another_obj_desc}?"
                     else:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} (highlighted by a red box) at a higher height than {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} at a higher height than {another_obj_desc}?"
                     answer = "yes"
                     incorrect_answer = "no"
                     answer_choices = (answer, incorrect_answer)
@@ -620,9 +698,9 @@ if __name__ == "__main__":
                     qa_pair_choices.append((question, image_order, answer_choices))
                 elif objid2info[obj1][3][1] < another_obj_pos[1]:
                     if mark_AB:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} (marked A) at a higher height than {another_obj_desc} (marked B)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} at a higher height than {another_obj_desc}?"
                     else:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} (highlighted by a red box) at a higher height than {another_obj_desc} (highlighted by a blue box)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {obj_desc} at a higher height than {another_obj_desc}?"
                     answer = "no"
                     incorrect_answer = "yes"
                     answer_choices = (answer, incorrect_answer)
@@ -632,9 +710,9 @@ if __name__ == "__main__":
                 # between B and C
                 if another_obj_pos[1] > another_obj_2_pos[1]:
                     if mark_AB:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} (marked B) at a higher height than {another_obj_2_desc} (marked C)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} at a higher height than {another_obj_2_desc}?"
                     else:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} (highlighted by a blue box) at a higher height than {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} at a higher height than {another_obj_2_desc}?"
                     answer = "yes"
                     incorrect_answer = "no"
                     answer_choices = (answer, incorrect_answer)
@@ -642,9 +720,9 @@ if __name__ == "__main__":
                     qa_pair_choices.append((question, image_order, answer_choices))
                 elif another_obj_pos[1] < another_obj_2_pos[1]:
                     if mark_AB:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} (marked B) at a higher height than {another_obj_2_desc} (marked C)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} at a higher height than {another_obj_2_desc}?"
                     else:
-                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} (highlighted by a blue box) at a higher height than {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Consider the 3D positions of the objects in the scene and not just the 2D positions in the image. Is the centerpoint of  {another_obj_desc} at a higher height than {another_obj_2_desc}?"
                     answer = "no"
                     incorrect_answer = "yes"
                     answer_choices = (answer, incorrect_answer)
@@ -655,9 +733,9 @@ if __name__ == "__main__":
                 ###### which another obj is closer to obj 1 ######
                 if np.linalg.norm(another_obj_pos - objid2info[obj1][3]) < np.linalg.norm(another_obj_2_pos - objid2info[obj1][3]):
                     if mark_AB:
-                        question = f"Estimate the real world distances between objects in the image. Which object is closer to {obj_desc} (marked A), {another_obj_desc} (marked B) or {another_obj_2_desc} (marked C)?"
+                        question = f"Estimate the real world distances between objects in the image. Which object is closer to {obj_desc}, {another_obj_desc} or {another_obj_2_desc}?"
                     else:
-                        question = f"Which object is closer to {obj_desc} (highlighted by a red box), {another_obj_desc} (highlighted by a blue box) or {another_obj_2_desc} (highlighted by a green box)?"
+                        question = f"Which object is closer to {obj_desc}, {another_obj_desc} or {another_obj_2_desc}?"
                     answer = f"{another_obj_desc}"
                     incorrect_answer = f"{another_obj_2_desc}"
                     answer_choices = (answer, incorrect_answer)
@@ -665,9 +743,9 @@ if __name__ == "__main__":
                     qa_pair_choices.append((question, image_order, answer_choices))
                 elif np.linalg.norm(another_obj_pos - objid2info[obj1][3]) > np.linalg.norm(another_obj_2_pos - objid2info[obj1][3]):
                     if mark_AB:
-                        question = f"Estimate the real world distances between objects in the image. Which object is closer to {obj_desc} (marked A), {another_obj_desc} (marked B) or {another_obj_2_desc} (marked C)?"
+                        question = f"Estimate the real world distances between objects in the image. Which object is closer to {obj_desc}, {another_obj_desc} or {another_obj_2_desc}?"
                     else:
-                        question = f"Which object is closer to {obj_desc} (highlighted by a red box), {another_obj_desc} (highlighted by a blue box) or {another_obj_2_desc} (highlighted by a green box)?" 
+                        question = f"Which object is closer to {obj_desc}, {another_obj_desc} or {another_obj_2_desc}?" 
                     answer = f"{another_obj_2_desc}"
                     incorrect_answer = f"{another_obj_desc}"
                     answer_choices = (answer, incorrect_answer)
