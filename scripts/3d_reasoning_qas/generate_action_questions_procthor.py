@@ -57,24 +57,34 @@ def add_red_dot_with_text(image, position, text):
 
 def get_current_state(controller):
     nav_visible_objects = controller.step("GetVisibleObjects", maxDistance=5).metadata["actionReturn"]
-    nav_visible_obj_assets = [objid2assetid[obj] for obj in nav_visible_objects] # these are the visible object asset ids in the scene
-    nav_visible_obj_assets = [asset for asset in nav_visible_obj_assets if asset!=""]
+    nav_visible_objects = [obj for obj in nav_visible_objects if objid2assetid[obj]!=""] # these are the visible object asset ids in the scene
+    
+    bboxes = controller.last_event.instance_detections2D
+    vis_obj_to_size = {}
+    for obj_id in bboxes:
+        vis_obj_to_size[obj_id] = (bboxes[obj_id][2] - bboxes[obj_id][0])*(bboxes[obj_id][3] - bboxes[obj_id][1])
 
-    assetid2info = {}
+
+    objid2info = {}
     objdesc2cnt = defaultdict(int)
     for obj_entry in controller.last_event.metadata['objects']:
         obj_name = obj_entry['name']
         obj_type = obj_entry['objectType']
         asset_id = obj_entry['assetId']
+        obj_id = obj_entry['objectId']
         
         distance = obj_entry['distance']
         pos = np.array([obj_entry['position']['x'], obj_entry['position']['y'], obj_entry['position']['z']])
         rotation = obj_entry['rotation']
         desc = assetid2desc.get(asset_id, obj_type)
-        moveable = obj_entry['moveable'] and obj_entry['visible']
-        pickupable = obj_entry['pickupable'] and obj_entry['visible']
+        moveable = obj_entry['moveable'] or obj_entry['pickupable']
+        
         asset_size_xy = vis_obj_to_size.get(obj_entry['objectId'], 0)
-        asset_pos_xy = bboxes.get(obj_entry['objectId'], None)
+        asset_pos_box = bboxes.get(obj_entry['objectId'], None)
+        if asset_pos_box is not None:
+            asset_pos_xy = [(asset_pos_box[0]+asset_pos_box[2])/2, (asset_pos_box[1]+asset_pos_box[3])/2]
+        else:
+            asset_pos_xy = None
 
         parent = obj_entry.get('parentReceptacles')
         if parent is not None:
@@ -86,42 +96,40 @@ def get_current_state(controller):
                     parent = objid2assetid[parent]
         
         is_receptacle = obj_entry['receptacle']
-        assetid2info[asset_id] = (obj_name, obj_type, distance, pos, rotation, desc, moveable, parent, asset_size_xy, is_receptacle, asset_pos_xy, pickupable)
-        objdesc2cnt[desc] += 1
+        objid2info[obj_id] = (obj_name, obj_type, distance, pos, rotation, desc, moveable, parent, asset_size_xy, is_receptacle, asset_pos_xy)
+        objdesc2cnt[obj_type] += 1
 
+    
     moveable_visible_objs = []
     for objid in nav_visible_objects:
-        assetid = objid2assetid[objid]
-        if assetid in assetid2info:
-            if assetid2info[assetid][6] and assetid2info[assetid][8]>400:
-                moveable_visible_objs.append(objid)
+        if objid2info[objid][6] and objid2info[objid][8]>1600:
+            moveable_visible_objs.append(objid)
 
-    pickupable_visible_objs = []
-    for objid in nav_visible_objects:
-        assetid = objid2assetid[objid]
-        if assetid in assetid2info:
-            if assetid2info[assetid][11]:
-                pickupable_visible_objs.append(objid)
-
-    return nav_visible_obj_assets, assetid2info, objdesc2cnt, moveable_visible_objs, pickupable_visible_objs
+    # pdb.set_trace()
+    return nav_visible_objects, objid2info, objdesc2cnt, moveable_visible_objs
 
 
-def get_action_questions(assetid2info, image_seq, action_seq):
+def get_action_questions(assetid2info):
     qa_list = []
     
     
 
 
 ACTION_CHOICES = [
-    ("MoveAhead", "move ahead by {param} meters", [0.25, 0.5]),
-    ("RotateRight", "rotate right by {param} degrees", range(20, 60, 10)),
-    ("RotateLeft", "rotate left by {param} degrees", range(20, 60, 10)),
-    ("PickupObject", "pick up the {object}", []),
-]
-
-OBJECT_ACTIONS = [
-    ("DropHandObject", "dropped the {object}", None),
-    ("ThrowObject", "threw the {object} forward", None),
+    ("MoveAhead", "move ahead by {param} meters", [0.2, 0.25, 0.3, 0.4, 0.5], []),
+    ("RotateRight", "rotate right by {param} degrees", range(20, 60, 10), []),
+    ("RotateLeft", "rotate left by {param} degrees", range(20, 60, 10), []),
+    ("PickupObject", "pick up the {object}", None, ["Pickupable", "Visible", "NoObjectInHand"]),
+    ("DropHandObject", "dropped the {object}", None, ["ObjectInHand"]),
+    ("ThrowObject", "threw the {object} forward", None, ["ObjectInHand"]),
+    ("DropHandObject", "dropped the {object}", None, ["ObjectInHand"]),
+    ("OpenObject", "opened the {object}", None, ["Visible", "Openable"]),
+    ("CloseObject", "closed the {object}", None, ["Visible", "Openable"]),
+    ("ToggleObjectOn", "turned on the {object}", None, ["Visible", "Toggleable", "Off"]),
+    ("ToggleObjectOff", "turned off the {object}", None, ["Visible", "Toggleable", "On"]),
+    ("SliceObject", "sliced the {object}", None, ["Visible", "Sliceable"]),
+    ("BreakObject", "broke the {object}", None, ["Visible", "Breakable"]),
+    ("FillObjectWithLiquid", "filled the {object} with liquid", None, ["Visible", "Fillable"]),
 ]
 
 
@@ -181,7 +189,7 @@ if __name__ == "__main__":
 
             nav_visible_objects = controller.step(
                 "GetVisibleObjects",
-                maxDistance=5,
+                maxDistance=1.5,
             ).metadata["actionReturn"]
 
             random_positions.append((cam_pos, cam_rot, len(nav_visible_objects)))
@@ -200,7 +208,7 @@ if __name__ == "__main__":
 
         sample_count = 0
         for cam_pos, cam_rot, _ in random.sample(random_positions, 5):
-            controller = Controller(scene=house_json, width=1024, height=1024, quality="Ultra")
+            controller = Controller(scene=house_json, width=512, height=512, quality="Ultra")
 
             try:
                 controller.step(action="Teleport", position=cam_pos, rotation=cam_rot)

@@ -24,14 +24,18 @@ from shapely.geometry.polygon import Polygon
 from datasets import load_dataset
 from PIL import Image, ImageDraw, ImageFont
 import yaml
+import numpy as np
+import h5py
 
 import ast
 import cv2
-
+import wandb
+from numpy.random import choice
 import sys
 # sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
 sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
 # sys.path.append("models/LLaVA_modified/LLaVA")
+#NOLINT
 from llava.mm_utils import (
     process_images,
     tokenizer_image_token,
@@ -50,6 +54,10 @@ import csv
 from utils.ai2thor_utils import generate_program_from_roomjson, format_program, generate_attribute_program_from_roomjson
 
 import numpy as np
+
+from custom_datasets.embodied_ai_datasets import *
+# from custom_datasets.d3_datasets import *
+
 
 def stich_image(images):
     total_width = sum(image.width for image in images)
@@ -254,8 +262,8 @@ def normalize_coords(program_text, cam_pos, cam_rot, attr=False):
 
         window_token, window_position, window_polygon, window_wall = room_json[f'window_{i}']
         window_position_norm = (window_position[0] - cam_pos[0], window_position[1], window_position[2] - cam_pos[2])
-        window_position_norm = (window_position[0]*np.cos(np.deg2rad(cam_rot)) - window_position[2]*np.sin(np.deg2rad(cam_rot)), window_position[0]*np.sin(np.deg2rad(cam_rot)) + window_position[2]*np.cos(np.deg2rad(cam_rot)))
-        room_json[f'window_{i}'] = (window_token, (int(window_position[0]), int(window_position[1]), int(window_position[2])), window_polygon, window_wall)
+        window_position_norm = (window_position_norm[0]*np.cos(np.deg2rad(cam_rot)) - window_position_norm[2]*np.sin(np.deg2rad(cam_rot)), window_position_norm[0]*np.sin(np.deg2rad(cam_rot)) + window_position_norm[2]*np.cos(np.deg2rad(cam_rot)))
+        room_json[f'window_{i}'] = (window_token, (int(window_position_norm[0]), int(window_position[1]), int(window_position_norm[1])), window_polygon, window_wall)
         i += 1
     
     # make room_json back to program_text
@@ -399,22 +407,27 @@ class MixLLaVAProcthorReasoning(Dataset):
         self.all_lens = []
 
         self.procthor_data = ProcTHOR_reasoning(args, tokenizer, image_processor)
-        self.all_mix.append(self.procthor_data)
+        #self.all_mix.append(self.procthor_data)
         self.all_lens.append(len(self.procthor_data))
 
         self.llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
-        self.all_mix.append(self.llava_data)
+        #self.all_mix.append(self.llava_data)
         self.all_lens.append(len(self.llava_data))
 
         if args.get("mix_recon"):
             self.procthor_recon = ProcTHOR_image_camposition_marked(args, tokenizer, image_processor)
-            self.all_mix.append(self.procthor_recon)
+            #self.all_mix.append(self.procthor_recon)
             self.all_lens.append(len(self.procthor_recon))
         
         if args.get("mix_recon_qa"):
             self.procthor_recon_qa = ProcTHOR_recon_qa(args, tokenizer, image_processor)
-            self.all_mix.append(self.procthor_recon_qa)
+            #self.all_mix.append(self.procthor_recon_qa)
             self.all_lens.append(len(self.procthor_recon_qa))
+        
+        if args.get("mix_3dcapqa"):
+            self.procthor_3dcapqa = ProcTHOR_3DCaptions(args, tokenizer, image_processor)
+            #self.all_mix.append(self.procthor_3dcapqa)
+            self.all_lens.append(len(self.procthor_3dcapqa))
 
         print("combined data ...")
 
@@ -437,6 +450,11 @@ class MixLLaVAProcthorReasoning(Dataset):
                 return self.llava_data[idx%self.all_lens[1]]
             else:
                 return self.procthor_recon_qa[idx%self.all_lens[2]]
+        elif self.args.get("mix_3dcapqa"):
+            if ran_num < 0.3:
+                return self.llava_data[idx%self.all_lens[1]]
+            else:
+                return self.procthor_3dcapqa[idx%self.all_lens[2]]
         else:
             if ran_num < 0.6:
                 return self.procthor_data[idx%self.all_lens[0]]
@@ -491,10 +509,10 @@ class MixLLaVAProcthorReasoning(Dataset):
             attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
             
             return_dict = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
+                "input_ids": input_ids[:, :800],
+                "attention_mask": attention_mask[:, :800],
                 'pixel_values': pixel_values,
-                "labels": input_ids,
+                "labels": input_ids[:, :800],
                 "prompts": prompts,
                 "text_labels": text_labels,
                 "datanames": datanames,
@@ -502,6 +520,236 @@ class MixLLaVAProcthorReasoning(Dataset):
             }
 
         return return_dict
+
+
+class CustomMix(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+        
+        if args.get("instructBLIP") or args.get("BLIP2"):
+            self.batch_decode = self.image_processor.batch_decode
+
+        self.all_mix = []
+        self.all_lens = []
+        self.weights = []
+
+        mix_datas = args.get("mix_datas")
+
+        if "llavaIT" in mix_datas:
+            self.llava_data = LLaVAInstructTune(args, tokenizer, image_processor)
+            self.all_mix.append(self.llava_data)
+            self.weights.append(mix_datas["llavaIT"])
+            self.all_lens.append(len(self.llava_data))
+
+        if "thor_reasoning" in mix_datas:
+            self.procthor_data = ProcTHOR_reasoning(args, tokenizer, image_processor)
+            self.all_mix.append(self.procthor_data)
+            self.weights.append(mix_datas["thor_reasoning"])
+            self.all_lens.append(len(self.procthor_data))
+
+        if "thor_recon" in mix_datas:
+            self.procthor_recon = ProcTHOR_image_camposition_marked(args, tokenizer, image_processor)
+            self.all_mix.append(self.procthor_recon)
+            self.weights.append(mix_datas["thor_recon"])
+            self.all_lens.append(len(self.procthor_recon))
+        
+        if "thor_recon_qa" in mix_datas:
+            self.procthor_recon_qa = ProcTHOR_recon_qa(args, tokenizer, image_processor)
+            self.all_mix.append(self.procthor_recon_qa)
+            self.weights.append(mix_datas["thor_recon_qa"])
+            self.all_lens.append(len(self.procthor_recon_qa))
+        
+        if "thor_3dcapqa" in mix_datas:
+            self.procthor_3dcapqa = ProcTHOR_3DCaptions(args, tokenizer, image_processor)
+            self.all_mix.append(self.procthor_3dcapqa)
+            self.weights.append(mix_datas["thor_3dcapqa"])
+            self.all_lens.append(len(self.procthor_3dcapqa))
+
+        if "gqa_spatial" in mix_datas:
+            self.gqa_spatial = GQASpatial(args, tokenizer, image_processor)
+            self.all_mix.append(self.gqa_spatial)
+            self.weights.append(mix_datas["gqa_spatial"])
+            self.all_lens.append(len(self.gqa_spatial))
+
+        print("combined data ...")
+
+        print("Total number of data points: ", sum(self.all_lens))
+    
+    def __getitem__(self, idx):
+        
+        data = random.choices(population=self.all_mix, k=1, weights=self.weights)[0]
+        return data[idx%len(data)]
+
+    def __len__(self):
+        return max(self.all_lens)
+    
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        if self.args.get("instructBLIP"):
+            # only works with batch size 1 for now change later. 
+            inputs = self.image_processor(images=images_batch[0], text=prompts[0], return_tensors="pt")
+            return_dict = {
+                "input_ids": inputs["input_ids"][:, :510],
+                "attention_mask": inputs["attention_mask"][:, :510],
+                'qformer_input_ids': inputs["qformer_input_ids"][:, :510],
+                'qformer_attention_mask': inputs["qformer_attention_mask"][:, :510],
+                'pixel_values': inputs["pixel_values"],
+                "labels": inputs["input_ids"][:, :510],
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "dataset": datanames,
+                "answers": answers,
+                "answer_choices": answer_choices,
+            }
+        else:
+            new_images = []
+            for image_b in images_batch:
+                for image in image_b:
+                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                    # pdb.set_trace()
+                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                    new_images.append(image)
+
+            pixel_values = torch.stack(new_images, dim=0)
+
+            input_ids = []
+            attention_mask = []
+            for prompt in prompts:
+                # pdb.set_trace()
+                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+                input_ids.append(input_id)
+                attention_mask.append(torch.ones_like(input_id))
+            
+            # pad with zeros
+            # pdb.set_trace()
+            input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+            attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+            
+            return_dict = {
+                'image_paths': image_paths,
+                "input_ids": input_ids[:, :800],
+                "attention_mask": attention_mask[:, :800],
+                'pixel_values': pixel_values,
+                "labels": input_ids[:, :800],
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "datanames": datanames,
+                "answers": answers,
+            }
+
+        return return_dict
+
+class GQASpatial(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+        
+        if args.get("instructBLIP") or args.get("BLIP2"):
+            self.batch_decode = self.image_processor.batch_decode
+
+        json_data = json.load(open('/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/GQA_spatial_qas_train.json'))
+
+        self.gqa_im_path = "/projectnb/ivc-ml/array/data/GQA/images/"
+
+        self.data = []
+        for img, qa_entries in json_data:
+            for question, answers in qa_entries:
+                self.data.append((img, question, answers))
+        
+        print("Total number of data points in GQA spatial: ", len(self.data))
+    
+    def __getitem__(self, idx):
+        im_file, question, answer = self.data[idx]
+        
+        correct_answer = answer[0]
+
+        ans_choice_order = ['"'+ans+'"' for ans in answer]
+        random.shuffle(ans_choice_order)
+        answer_choices_format = " or ".join(ans_choice_order) 
+
+        #if im_file is not None:
+        img = [Image.open(im_file).convert("RGB"),]
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        if self.args['mode'] == "train":
+            prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}. ###Assistant: \n {correct_answer} \n###"
+            text_labels = prompt
+        else:
+            prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}. ###Assistant: \n "
+            text_labels = prompt + correct_answer + " \n###"        
+
+        return [im_file,], img, prompt, text_labels, correct_answer, answer, "gqa_spatial"
+
+    def __len__(self):
+        return len(self.data)
+    
+    def collate_fn(self, batch):
+        
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        if self.args.get("instructBLIP"):
+            # only works with batch size 1 for now change later. 
+            inputs = self.image_processor(images=images_batch[0], text=prompts[0], return_tensors="pt")
+            return_dict = {
+                "input_ids": inputs["input_ids"],
+                "attention_mask": inputs["attention_mask"],
+                'qformer_input_ids': inputs["qformer_input_ids"],
+                'qformer_attention_mask': inputs["qformer_attention_mask"],
+                'pixel_values': inputs["pixel_values"],
+                "labels": inputs["input_ids"],
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "dataset": datanames,
+                "answers": answers,
+                "answer_choices": answer_choices,
+            }
+        else:
+            new_images = []
+            for image_b in images_batch:
+                for image in image_b:
+                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                    # pdb.set_trace()
+                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                    new_images.append(image)
+
+            pixel_values = torch.stack(new_images, dim=0)
+
+            input_ids = []
+            attention_mask = []
+            for prompt in prompts:
+                # pdb.set_trace()
+                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+                input_ids.append(input_id)
+                attention_mask.append(torch.ones_like(input_id))
+            
+            # pad with zeros
+            # pdb.set_trace()
+            input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+            attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+            
+            # pdb.set_trace()
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "dataset": datanames,
+                "answers": answers,
+                "answer_choices": answer_choices,
+            }
+
+        return return_dict
+
 
 
 class LLaVAInstructTune(Dataset):
@@ -672,7 +920,8 @@ class ProcTHOR_reasoning(Dataset):
             for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0.1):]:
                 self.data.extend(qa_entries)
         
-        random.shuffle(self.data)
+        if args.get("split") != "val":
+            random.shuffle(self.data)
         print("Total number of data points: ", len(self.data))
 
 
@@ -695,11 +944,14 @@ class ProcTHOR_reasoning(Dataset):
         if "would i be moving more" in question.lower():
             question_type = "relative_obj_action_movement"
 
-        if "object is closer to the camera" in question.lower():
+        if "is closer" in question.lower():
             question_type = "obj_depth"
         
-        if "consider the relative distances" in question.lower():
-            question_type = "obj_positions"
+        if "considering the relative positions" in question.lower():
+            question_type = "sp_rel"
+
+        if 'estimate the real world distances' in question.lower():
+            question_type = "relative_distance"
 
         correct_answer = answer_choices[0]
         
@@ -889,7 +1141,7 @@ class ProcTHOR_recon_qa(Dataset):
 
         images = [Image.open(image_path[0]).convert("RGB"),]
 
-        pdb.set_trace()
+        #pdb.set_trace()
         return image_path, images, prompt, text_label, answer, answer_choices, "procthor_recon_qa"
 
     def __len__(self):
@@ -1060,6 +1312,112 @@ class AnyImageCaption(Dataset):
         return return_dict
 
 
+class ProcTHOR_3DCaptions(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor 
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+
+        split = args.get("split")
+        self.split = split
+
+        if split in ["train", "valtrain"]:
+            json_data1 = json.load(open(f"/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_captions_train.json"))
+            json_data2 = json.load(open(f"/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_captions_train_split2.json"))
+            json_data = json_data1 + json_data2
+        else:
+            json_data = json.load(open(f"/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_captions_{split}.json"))
+
+        self.data = []
+        for frame_path, visible_obj_descs, coordinate_text, field_of_view in json_data:
+            for question, answer in visible_obj_descs:
+                self.data.append((frame_path, question, answer, coordinate_text, field_of_view))
+        
+        print("Total number of data points: ", len(self.data))
+
+        if args["split"] == "train":
+            self.data = self.data[:int(len(self.data)*0.8)]
+        elif args["split"] == "valtrain":
+            self.data = self.data[int(len(self.data)*0.8):int(len(self.data)*0.9)]
+        elif args["split"] == "val":
+            self.data = self.data[:]
+
+    def __getitem__(self, idx):
+        frame_path, question, answer, coordinate_text, field_of_view = self.data[idx]
+        marked_frame = frame_path.replace("_0.jpg", "_0_marked.jpg")
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prefix += "###Human: <im_start><image><im_end> \nHuman: Answer with object names and their precise 3D points."
+        prefix += "Assume camera is at origin. Camera looks at positive Z, X points to right and Y points upwards. "
+        
+        if self.args.get("random_point"):
+            im_file_path = marked_frame
+            img = Image.open(im_file_path).convert("RGB")
+            prompt = f"{prefix} {coordinate_text} {question} ###Assistant: \n"
+        else:
+            im_file_path = frame_path
+            img = Image.open(im_file_path).convert("RGB")
+            prompt = f"{prefix} {question} ###Assistant: \n "
+        
+        if self.split == "train":
+            prompt = f"{prompt} {answer} \n###"
+            text_label = prompt
+        else:
+            prompt = f"{prompt} "
+            text_label = prompt + answer + " \n###"
+
+        print(prompt)
+
+        return [im_file_path,], [img,], prompt, text_label, answer, [answer,], f"procthor_3dcapqa"
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def collate_fn(self, batch):
+        image_paths, images, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images_batch:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
+
+
+
 class ProcTHOR_image_camposition_marked(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
@@ -1163,6 +1521,7 @@ class ProcTHOR_image_camposition_marked(Dataset):
             cam_angle = 0
             program_text = program_text.replace("(", "[")
             program_text = program_text.replace(")", "]")
+            program_text = program_text.split("window_")[0].strip() # window positions seem confusing, fix later. 
 
         program_json = yaml.load(program_text, Loader=yaml.FullLoader)
         format_polygon_coords = str(program_json['polygon'])
@@ -2022,7 +2381,13 @@ class CVBench(Dataset):
 
         if self.args.get("instructBLIP"):
             # only works with batch size 1 for now change later. 
-            inputs = self.image_processor(images=images[0][0], text=prompts[0], return_tensors="pt")
+            if len(images[0]) > 1:
+                #stich the images together 
+                img = stich_image([image for image in images[0]])
+            else:
+                img = images[0][0]
+
+            inputs = self.image_processor(images=img, text=prompts[0], return_tensors="pt")
             return_dict = {
                 "input_ids": inputs["input_ids"],
                 "attention_mask": inputs["attention_mask"],
@@ -2065,8 +2430,8 @@ class CVBench(Dataset):
                 'answers': answers,
                 'dataset': datanames,
                 'labels': input_ids,
-
-                "text_labels": text_labels
+                "text_labels": text_labels,
+                'images': images
             }
             # pdb.set_trace()
 
@@ -2087,8 +2452,8 @@ class BLINK(Dataset):
 
         dataset_name = 'BLINK-Benchmark/BLINK'
 
-        #SUBTASK_NAME = ['Multi-view_Reasoning', 'Relative_Depth', 'Spatial_Relation'] # , 'Object_Localization',]
-        SUBTASK_NAME = ['Relative_Depth', 'Spatial_Relation'] # , 'Object_Localization',]
+        SUBTASK_NAME = ['Multi-view_Reasoning', 'Relative_Depth', 'Spatial_Relation'] # , 'Object_Localization',]
+        #SUBTASK_NAME = ['Relative_Depth', 'Spatial_Relation'] # , 'Object_Localization',]
 
         self.data = []
         for subtask in SUBTASK_NAME:
@@ -2153,7 +2518,7 @@ class BLINK(Dataset):
 
         if self.args.get("instructBLIP"):
             # only works with batch size 1 for now change later. 
-            inputs = self.image_processor(images=images_batch[0], text=prompts[0], return_tensors="pt")
+            inputs = self.image_processor(images=images[0], text=prompts[0], return_tensors="pt")
             return_dict = {
                 "input_ids": inputs["input_ids"],
                 "attention_mask": inputs["attention_mask"],
@@ -2232,3 +2597,5 @@ class AllMLMBench(Dataset):
 
     def collate_fn(self, batch):
         return self.all_data[0].collate_fn(batch)
+
+

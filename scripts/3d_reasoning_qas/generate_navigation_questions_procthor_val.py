@@ -113,12 +113,11 @@ def get_current_state(controller):
 if __name__ == "__main__":
     
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
-    qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation/'
-    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
+    qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation_val/'
+    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val.json'
     vis = True
-    stats = False
+    stats = True
     generate = True
-    load_progress = False
 
     if generate:
         if not os.path.exists(qa_im_path):
@@ -138,11 +137,14 @@ if __name__ == "__main__":
 
         all_im_qas = []
         
-        if load_progress:
-            all_im_qas = json.load(open(qa_json_path, "r"))
+        all_im_qas = json.load(open(qa_json_path, "r"))
 
-        for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
+        for house_ind, house in enumerate(tqdm.tqdm(dataset["val"])):
+            if house_ind < 955:
+                continue
             
+            if house_ind > 5000:
+                break
             house_json = house
 
             try:
@@ -197,7 +199,7 @@ if __name__ == "__main__":
                 os.makedirs(qa_im_path + f"{house_ind}")
 
             sample_count = 0
-            for cam_pos, cam_rot, _ in random.sample(random_positions[:5], 2):
+            for cam_pos, cam_rot, _ in random_positions[:1]:
                 qa_pair_choices = []
                 try:
                     controller = Controller(scene=house_json, width=512, height=512, quality="Ultra", platform=CloudRendering,  renderInstanceSegmentation=True)
@@ -232,7 +234,7 @@ if __name__ == "__main__":
                 
                 step_i = 1
                 fail_i = 0
-                while step_i < 3:
+                while step_i < random.choice(range(2, 4)):
                     if fail_i > 5:
                         break
                     
@@ -245,13 +247,13 @@ if __name__ == "__main__":
 
                     # pdb.set_trace()
                     try:
-                        state1 = controller.step(action=direction, degrees=angle)
-                        state2 = controller.step(action="MoveAhead", moveMagnitude=distance)
+                        state = controller.step(action=direction, degrees=angle)
+                        state = controller.step(action="MoveAhead", moveMagnitude=distance)
                     except:
                         fail_i += 1
                         continue
 
-                    if state1.metadata["lastActionSuccess"] and state2.metadata["lastActionSuccess"]:
+                    if state.metadata["lastActionSuccess"]:
                         actions.append(f"rotated {text_direction} by {angle} degrees, moved forward by {distance} meters")
                         simple_actions.append(f"{text_direction}")
                         wrong_action_seq.append(
@@ -270,18 +272,18 @@ if __name__ == "__main__":
 
                     step_i += 1
 
-                if len(actions) < 2:
-                    print("Some actions failed, continuing")
+                if len(actions) < 1:
+                    print("No actions taken, continuing")
                     controller.stop()
                     continue
                 
                 action = " and then ".join(actions)
-                prompt_action = " and then ".join(actions[:1])
+                prompt_action = " and then ".join(actions[:2])
                 correct_action = actions[-1]
                 wrong_action = wrong_action_seq[-1]
 
-                simple_action = " and then ".join(simple_actions[:1])
-                simple_wrong_action = " and then ".join(simple_wrong_actions[:1])
+                simple_action = " and then ".join(simple_actions)
+                simple_wrong_action = " and then ".join(simple_wrong_actions)
 
                 # swap one of the correct actions for a wrong action
                 swap_i = random.choice(range(len(actions)))
@@ -298,15 +300,13 @@ if __name__ == "__main__":
                 question = "The first image is from the beginning of the video and the second image is from the end. How did the camera likely move when shooting the video?"
                 answer_choices = [simple_action, simple_wrong_action]
                 # pdb.set_trace()
-                qa_pair_choices.append((question, image_seq[:2], answer_choices))
+                qa_pair_choices.append((question, image_seq, answer_choices))
 
-                if len(image_seq) > 2:
-                    # question about the actions taken in the sequence of images
-                    question = f"The three images are from a camera shooting a video. In the first two images, the camera {prompt_action}. How did the camera likely move from the second image to the third image? Estimate precisely."
-                    answer_choices = [correct_action, wrong_action]
-                    qa_pair_choices.append((question, image_seq, answer_choices))
+                # question about the actions taken in the sequence of images
+                question = f"The three images are from a camera shooting a video. In the first two images, the camera {prompt_action}. How did the camera likely move from the second image to the third image? Estimate precisely."
+                answer_choices = [correct_action, wrong_action]
+                qa_pair_choices.append((question, image_seq, answer_choices))
 
-                
                 # pdb.set_trace()
                 # check objects we moved closer or further to. 
                 obj_distance_changes = []
@@ -314,11 +314,11 @@ if __name__ == "__main__":
                 move_farther_assets = []
                 nav_visible_objects_upd, objid2info_upd, objdesc2cnt_upd, moveable_visible_objs_upd = get_current_state(controller)
 
-                image_marked_fin = Image.open(image_seq[-1]).convert("RGB")
+                image_marked = Image.open(image_seq[0]).convert("RGB")
                 for asst_cnt, asset_id in enumerate(nav_visible_objects_upd):
-                    asset_size = objid2info_upd[asset_id][8]
-                    asset_pos = objid2info_upd[asset_id][10]
-                    asset_count = objdesc2cnt_upd[objid2info[asset_id][1]]
+                    asset_size = objid2info[asset_id][8]
+                    asset_pos = objid2info[asset_id][10]
+                    asset_count = objdesc2cnt[objid2info[asset_id][1]]
 
                     #check if object too close to the edge:
                     if asset_pos is not None:
@@ -332,7 +332,7 @@ if __name__ == "__main__":
 
                         obj_distance_changes.append((asset_id, distance, og_distance, asst_cnt))
                         # if asset_count > 1:
-                        image_marked_fin = add_red_dot_with_text(image_marked_fin, (asset_pos[0], asset_pos[1]), str(asst_cnt))
+                        image_marked = add_red_dot_with_text(image_marked, (asset_pos[0], asset_pos[1]), str(asst_cnt))
 
                         if distance < og_distance:
                             move_closer_assets.append((asset_id, asst_cnt))
@@ -340,41 +340,9 @@ if __name__ == "__main__":
                             move_farther_assets.append((asset_id, asst_cnt))
                 
                 new_path_marked = qa_im_path + f"{house_ind}/{sample_count}_marked.jpg"
-                image_marked_fin.save(new_path_marked)
-
-                camera_pos = controller.last_event.metadata['agent']['position']
-                camera_rot = controller.last_event.metadata['agent']['rotation']['y']
-                xz_rotation_matrix = np.array([[np.cos(math.radians(camera_rot)), -np.sin(math.radians(camera_rot))], [np.sin(math.radians(camera_rot)), np.cos(math.radians(camera_rot))]])
+                image_marked.save(new_path_marked)
 
                 
-                for asset_id, distance, og_distance, asset_cnt in random.sample(obj_distance_changes, min(3, len(obj_distance_changes))):
-
-                    asset_id_pos = objid2info_upd[asset_id][3]
-
-                    normalized_pos = [asset_id_pos[0] - camera_pos['x'], asset_id_pos[2] - camera_pos['z']]
-                    # normalize rot such that camera direction is 0
-                    normalized_pos = np.dot(xz_rotation_matrix, normalized_pos)
-                    
-                    #angle formed by camera and object
-                    angle = int(math.degrees(math.atan2(normalized_pos[0], normalized_pos[1])))
-
-                    if angle < 0:
-                        angle = abs(angle)
-                        direction = "left by " + str(angle) + " degrees"
-                        wrong_direction = random.choice(["right by " + str(angle) + " degrees", "straight", "left by " + str(angle+30) + " degrees"])
-                    elif angle > 0:
-                        direction = "right by " + str(angle) + " degrees"
-                        wrong_direction = random.choice(["left by " + str(angle) + " degrees", "straight", "right by " + str(angle+30) + " degrees"])
-                    else:
-                        direction = "look straight"
-                        wrong_direction = random.choice(["left by 30 degrees", "right by 30 degrees"])
-                    
-                    question = f"The three images are from a camera shooting a video. While shooting the frames, the camera {action}. I need to go to {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image). Which direction should I turn to face the object?"
-                    answer_choices = [direction, wrong_direction]
-                    image_order = [image_seq[0], image_seq[1], new_path_marked]
-                    qa_pair_choices.append((question, image_order, answer_choices))
-
-                '''
                 for asset_id, distance, og_distance, asset_cnt in random.sample(obj_distance_changes, min(3, len(obj_distance_changes))):
                     if distance < og_distance:
                         if random.random() < 0.5:
@@ -433,8 +401,6 @@ if __name__ == "__main__":
                             answer_choices = ["no", "yes"]
                             image_order = [new_path_marked,]
                             qa_pair_choices.append((question, image_order, answer_choices))
-                '''
-
 
                 # pdb.set_trace()
                 if len(qa_pair_choices) > 0:
@@ -451,7 +417,7 @@ if __name__ == "__main__":
         # view in html
         html_str = f"<html><head></head><body>"
         public_im_folder = "/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/"
-        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 15):
+        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 50):
             if not os.path.exists(public_im_folder + f"{house_ind}"):
                 os.makedirs(public_im_folder + f"{house_ind}")
                 

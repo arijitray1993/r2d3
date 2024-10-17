@@ -18,6 +18,7 @@ from sklearn.metrics import average_precision_score
 
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel
+import wandb
 
 class GenHouseIms:
 
@@ -78,7 +79,10 @@ def compute_locationposeattr_error(pred_locations, gt_locations, max_dimension, 
                 cost_matrix[i, j] = np.linalg.norm(np.array(pred_locations[j][0]) - np.array(gt_locations[i][0]))
             except:
                 pdb.set_trace()
-            pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1][1])) # just rotation around y axis
+            try:
+                pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1][1])) # just rotation around y axis
+            except:
+                pose_matrix[i, j] = (abs(pred_locations[j][1][1] - gt_locations[i][1])) # just rotation around y axis
     #print(cost_matrix)
     # then we use linear_sum_assignment to find the best matching between gt and pred
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -1186,6 +1190,7 @@ class HouseNatLanguageSemSimSelected:
                 gt_loc = gt_locations[obj]
 
                 # mean_dist, accuracy = compute_location_error(pred_loc, gt_loc, max_dimension)
+                # pdb.set_trace()
                 mean_dist, accuracy, pose_accuracy, mean_pose_dist, attr_sim = compute_locationposeattr_error(pred_loc, gt_loc, max_dimension, self.attrmodel, self.attrtokenizer)
                 # if obj in selected_obj_classes:
                 self.object_location_accuracy.append(accuracy)
@@ -1786,11 +1791,174 @@ class QAAccuracy:
         self.accs = []
         self.logger = args['logger']
         self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+        self.table = wandb.Table(columns=["DataName", "Question", "GT Answer", "Pred Answer", "Correct", "Image"])
+        self.log_table = False if args['log_table'] == False else True
     
     def update(self, output, gt):
         
         data_name = gt['dataset'][0]
         gt_question = gt['prompts'][0]
+        gt_answers = gt['answers']
+        pred_answers = output
+
+        format_answer = pred_answers.split("###")[0].strip().lower()
+        
+        if format_answer == "":
+            if "###Human" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Human:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+            elif "###Assistant" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###")[0].strip().lower()
+            else:
+                format_answer = pred_answers.split("###")[0].strip().lower().split(".")[0]
+
+        if gt_answers[0] in ["yes", "no"]:
+            if format_answer not in ["yes", "no"]:
+                format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+
+        # pdb.set_trace()
+        format_answer_words = [format_answer,]
+        # pdb.set_trace()
+        gt_answer = gt_answers[0].lower().strip()
+
+        gt_answer = gt_answer.replace("(", "")
+        gt_answer = gt_answer.replace(")", "")
+
+        gt_answer_words = [gt_answer,]
+        
+        if "BLINK" in data_name:
+            if "is closer" in gt_answer:
+                gt_answer_word = gt_answer.split(" is closer")[0].split(" ")[-1].strip().lower()
+                gt_answer_words = [gt_answer_word]
+
+                format_answer_word = format_answer.split(" is closer")[0].split(" ")[-1].strip().lower()
+                format_answer_words = [format_answer_word]
+                # pdb.set_trace()
+
+        if "which object is closer" in gt_question.lower():
+            if 'is closer' in format_answer:
+                format_answer_words = [format_answer.split(" is closer")[0].split(" ")[-1].strip().lower(), format_answer.split("is closer ")[1].split(" ")[0].strip().lower()]
+            elif 'are closer' in format_answer:
+                format_answer_words = [format_answer.split(" are closer")[0].split(" ")[-1].strip().lower(), format_answer.split("are closer ")[1].split(" ")[0].strip().lower()]
+            elif "is situated closer" in format_answer:
+                format_answer_words = [format_answer.split(" is situated closer")[0].split(" ")[-1].strip().lower(), format_answer.split("is situated closer ")[1].split(" ")[0].strip().lower()]
+            elif "are situated closer" in format_answer:
+                format_answer_words = [format_answer.split(" are situated closer")[0].split(" ")[-1].strip().lower(), format_answer.split("are situated closer ")[1].split(" ")[0].strip().lower()]
+            else:
+                format_answer_words = [format_answer_words[0],]
+
+        if 'is the camera moving' in gt_question.lower():
+            if 'moving' in format_answer:
+                format_answer_word = format_answer.split("moving ")[1].split(" ")[0].strip().lower()
+                if format_answer_word == "clockwise":
+                    format_answer_word = "left"
+                elif format_answer_word == "counter-clockwise":
+                    format_answer_word = "right"
+                else:
+                    format_answer_word = format_answer_word
+                format_answer_words = [format_answer_word]
+            else:
+                format_answer_words = [format_answer_words[0],]
+        
+        if 'considering the relative positions' in gt_question.lower():
+            if 'is located to' in format_answer:
+                if "right" in format_answer:
+                    format_answer_words = ["right"]
+                else:
+                    format_answer_words = ["left"]
+            else:
+                format_answer_words = [format_answer_words[0],]
+
+        if '(highlighted by' in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("(highlighted by")[0].strip().lower()]
+
+        if "1." in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("1.")[1].strip().lower()]
+
+        if "is located" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("is located ")[1].split(" ")[0].strip().lower()]
+        
+        if "is located on the" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("is located on the ")[1].split(" ")[0].strip().lower()]
+
+        if "answer:" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("answer: ")[1].split(" ")[0].strip().lower()]
+
+        
+        
+
+        correct = 0
+        for word in gt_answer_words:
+            if word in format_answer_words:
+                correct = 1
+
+        self.accs.append(correct)
+
+        print("GT: ", gt_answer_words)
+        print("Pred: ", format_answer_words)
+        print("Correct: ", correct)
+
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name, correct))
+
+        if self.log_table:
+            if 'considering the relative positions' in gt_question.lower():
+                if random.random() < 0.2:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+            elif 'cvbench' in data_name:
+                if random.random() < 0.4:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+            else:
+                if random.random() < 0.1:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))    
+            
+            
+            if data_name == "BLINK_Spatial_Relation":
+                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+
+
+        
+    def compute(self):
+        try:
+            with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+                json.dump(self.outputs, f)
+        except:
+            print("Error in saving output json")
+            pass
+
+        # acc by data name
+        data_accs = {}
+        for out_entry, acc in zip(self.outputs, self.accs):
+            data_name = out_entry[3]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+            data_accs[data_name].append(acc)
+
+        for data_name in data_accs:
+            acc = np.mean(data_accs[data_name])
+            print("Num data points: ", len(data_accs[data_name]))
+            self.logger.log({f"{data_name}_acc": acc})
+        
+        if self.log_table:
+            self.logger.log({"SPrel_examples": self.table})
+
+
+class QAAccuracyBatch:
+    def __init__(self, args):
+        self.outputs = []
+        self.accs = []
+        self.logger = args['logger']
+        self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+        self.table = wandb.Table(columns=["DataName", "Question", "GT Answer", "Pred Answer", "Correct", "Image"])
+    
+    def update(self, output, gt):
+        
+        data_name = gt['dataset']
+        gt_question = gt['prompts']
         gt_answers = gt['answers']
         pred_answers = output
 
@@ -1863,6 +2031,21 @@ class QAAccuracy:
             else:
                 format_answer_words = [format_answer_words[0],]
 
+        if '(highlighted by' in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("(highlighted by")[0].strip().lower()]
+
+        if "1." in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("1.")[1].strip().lower()]
+
+        if "is located" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("is located ")[1].split(" ")[0].strip().lower()]
+        
+        if "is located on the" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("is located on the ")[1].split(" ")[0].strip().lower()]
+
+        if "answer:" in format_answer_words[0]:
+            format_answer_words = [format_answer_words[0].split("answer: ")[1].split(" ")[0].strip().lower()]
+        
 
         correct = 0
         for word in gt_answer_words:
@@ -1875,7 +2058,22 @@ class QAAccuracy:
         print("Pred: ", format_answer_words)
         print("Correct: ", correct)
 
-        self.outputs.append((gt_question, gt_answers, pred_answers, data_name))
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name, correct))
+
+        if 'considering the relative positions' in gt_question.lower():
+            if random.random() < 0.2:
+                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+        elif 'cvbench' in data_name:
+            if random.random() < 0.4:
+                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+        else:
+            if random.random() < 0.1:
+                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))    
+        
+        
+        if data_name == "BLINK_Spatial_Relation":
+            self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+
 
         
     def compute(self):
@@ -1889,7 +2087,7 @@ class QAAccuracy:
         # acc by data name
         data_accs = {}
         for out_entry, acc in zip(self.outputs, self.accs):
-            data_name = out_entry[-1]
+            data_name = out_entry[3]
             if data_name not in data_accs:
                 data_accs[data_name] = []
             data_accs[data_name].append(acc)
@@ -1898,7 +2096,10 @@ class QAAccuracy:
             acc = np.mean(data_accs[data_name])
             print("Num data points: ", len(data_accs[data_name]))
             self.logger.log({f"{data_name}_acc": acc})
-    
+        
+        self.logger.log({"SPrel_examples": self.table})
+
+
 
 class QA_Accuracy_choice:
     def __init__(self, args):
@@ -1912,6 +2113,7 @@ class QA_Accuracy_choice:
         data_name = gt['dataset'][0]
         gt_question = gt['prompts'][0]
         gt_answers = gt['answers']
+        images = gt['images'][0]
         pred_answers = output
 
         format_answer = pred_answers.split("###")[0].strip().lower()

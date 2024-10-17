@@ -495,6 +495,58 @@ class LlavaModel_13B_Interface(nn.Module):
         
         return outputs
 
+class LlavaNext_13B_Interface(nn.Module):
+
+    def __init__(self, args):
+        
+        super().__init__()
+        self.model = LlavaNextForConditionalGeneration.from_pretrained("llava-hf/llava-v1.6-vicuna-13b-hf", torch_dtype=torch.float16, low_cpu_mem_usage=True)
+        self.image_processor = LlavaNextProcessor.from_pretrained("llava-hf/llava-v1.6-vicuna-13b-hf")
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values=None, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+        
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        # pdb.set_trace()
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values=None, attention_mask=None, labels=None,):
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values,
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+        
+        return outputs
+
 
 class LlavaModelInterface(nn.Module):
 

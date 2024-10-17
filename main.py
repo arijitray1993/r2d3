@@ -34,6 +34,7 @@ import gc
 import time
 import numpy as np
 import random
+from omegaconf import OmegaConf,open_dict
 
 # fix all seeds
 seed = 20249
@@ -132,7 +133,9 @@ class GenericModule():
                     #outputs = self.model.forward(*[batch[inp] for inp in self.model_input_choice])
                     # try:
                         # pdb.set_trace()
+                    # pdb.set_trace()
                     outputs = self.model.forward(**{inp: batch[inp] for inp in self.model_input_choice})
+                    
                     # except:
                     #   pdb.set_trace()
                     #    print("Error in forward pass. Skipping step...")
@@ -154,8 +157,7 @@ class GenericModule():
                         print("Loss is nan. Skipping step...")
                         self.optimizer.zero_grad()
                         continue
-                    
-                    
+
                     self.accelerator.backward(loss)
 
                     self.optimizer.step()
@@ -269,8 +271,10 @@ def main(cfg: DictConfig):
     if cfg.eval_only:
         # if eval only, load test data, or else
         # load val data while training to choose hyperparameters.
+        
         dataset_val = getattr(datasets, cfg.val_dataset_choice)(cfg.val_dataset_args, model.tokenizer, model.image_processor)
     else:
+        
         dataset_val = getattr(datasets, cfg.valtrain_dataset_choice)(
             cfg.valtrain_dataset_args, model.tokenizer, model.image_processor
         )
@@ -337,9 +341,11 @@ def main(cfg: DictConfig):
                     lora_module_names = ["q_proj", "v_proj", "query", "key", "value", "qkv"]
 
             # pdb.set_trace()
+            lora_rank = cfg.get("lora_rank", 128)
+            lora_alpha = cfg.get("lora_alpha", 256)
             lora_config = LoraConfig(
-                r=128,
-                lora_alpha=256,
+                r=lora_rank,
+                lora_alpha=lora_alpha,
                 target_modules=lora_module_names,
                 lora_dropout=0.1,
                 bias="none",

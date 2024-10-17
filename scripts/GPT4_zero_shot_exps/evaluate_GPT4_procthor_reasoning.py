@@ -82,7 +82,7 @@ if __name__=="__main__":
 
         prompt = prompt.split("Human: Answer in natural language.")[-1].split("###Assistant")[0]
 
-        pdb.set_trace()
+        # pdb.set_trace()
 
         response = get_caption(image_path, prompt, api_key)
 
@@ -101,7 +101,7 @@ if __name__=="__main__":
         # pdb.set_trace()
 
         # Save the responses
-        with open("GPT4_procthorreasoning_response.json", "w") as f:
+        with open("GPT4_procthorreasoning_response_updated.json", "w") as f:
             json.dump(all_responses, f)
 
         if ind>=2000:

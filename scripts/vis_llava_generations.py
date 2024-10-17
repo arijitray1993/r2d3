@@ -96,7 +96,6 @@ def generate_output_houses(json_path, generate_explanation=False, use_language=F
         except:
             print("not a valid house json")
 
-        pdb.set_trace()
         controller.step(
             action="RandomizeLighting",
             brightness=(1.5, 2),
@@ -213,7 +212,7 @@ def generate_output_houses(json_path, generate_explanation=False, use_language=F
                         continue      
 
                     event = controller.step(action="Teleport", position=position, rotation=rotation)
-                    pdb.set_trace()
+                    # pdb.set_trace()
                     if event.metadata["lastActionSuccess"]:
                         success = 1
                     else:
@@ -322,7 +321,7 @@ if __name__=="__main__":
         attrtokenizer = AutoTokenizer.from_pretrained('intfloat/e5-base-v2')
         attrmodel = AutoModel.from_pretrained('intfloat/e5-base-v2').cuda()
 
-        generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_anyimage_test/output.json", generate_explanation=False, use_language=True, assetdesc_to_obj=assetdesc_to_obj, attrtokenizer=attrtokenizer, attrmodel=attrmodel)
+        generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_attr_campolygonangle_randompointorient/output.json", generate_explanation=False, use_language=True, assetdesc_to_obj=assetdesc_to_obj, attrtokenizer=attrtokenizer, attrmodel=attrmodel)
 
     else:
         generate_output_houses("/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_incomplete_oneim_caption_campolygon_orientlanguage/output.json", generate_explanation=False)
