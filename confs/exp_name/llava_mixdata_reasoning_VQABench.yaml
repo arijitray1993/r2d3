@@ -14,10 +14,10 @@ tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning/lemon-pond-22_110000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning/woven-snow-25_110000
 
 eval_every: 5000
-num_eval_steps: 5000
+num_eval_steps: 10000
 
 no_shuffle: False
 
@@ -45,7 +45,7 @@ val_dataset_choice: "AllVQA"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 1500,
+  num_data_points: 3000,
 }
 val_collate_fn: "collate_fn" 
 

@@ -188,10 +188,13 @@ class GenericModule():
             #    *[batch[inp] for inp in self.model_input_choice]
             #)
             with torch.no_grad():
-                generated_ids = self.model.generate(**{inp: batch[inp] for inp in self.model_input_choice})
+                try:
+                    generated_ids = self.model.generate(**{inp: batch[inp] for inp in self.model_input_choice})
+                except:
+                    pdb.set_trace()
 
             generated_ids[generated_ids==-200] = 1
-            generated_text = self.test_dataloader.dataset.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+            generated_text = self.test_dataloader.dataset.batch_decode(generated_ids, skip_special_tokens=True)# [0].strip()
             
             print("Generated text: ")
             print(generated_text)

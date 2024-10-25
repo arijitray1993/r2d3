@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw, ImageFont
 import yaml
 import numpy as np
 import h5py
+import math
 
 import ast
 import cv2
@@ -522,6 +523,7 @@ class MixLLaVAProcthorReasoning(Dataset):
         return return_dict
 
 
+
 class CustomMix(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
@@ -644,6 +646,47 @@ class CustomMix(Dataset):
 
         return return_dict
 
+
+class VSRDataset(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.batch_decode = self.tokenizer.batch_decode
+
+        data_files = {"train": "train.jsonl",}
+        dataset = load_dataset("cambridgeltl/vsr_random", data_files=data_files)
+        self.coco_path = "/projectnb/ivc-ml/array/data/COCO/images/"
+
+        self.data = []
+        for entry in dataset:
+            image_path = entry["image_link"]
+            image_path = image_path.split("/")[-2:]
+            image_path = os.path.join(self.coco_path, *image_path)
+
+            caption = entry["caption"].lower()
+            relation = entry["relation"].lower()
+            label = entry["label"]
+
+            entities = caption.split(relation)
+
+            subject, object = entities[0], entities[1]
+            subject = subject.strip().lower().replace("is", "").replace("the", "").replace("are", "")
+            object = object.strip().lower().replace("is", "").replace("the", "").replace("are", "")
+
+            question = f"Is {subject} {relation} the {object}?"
+            answer = "yes" if label == 1 else "no"
+
+            self.data.append((image_path, question, answer))
+
+            
+
+
+
+class VR25D(Dataset):
+    pass
+
+
 class GQASpatial(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
@@ -663,6 +706,11 @@ class GQASpatial(Dataset):
         for img, qa_entries in json_data:
             for question, answers in qa_entries:
                 self.data.append((img, question, answers))
+
+        if args.get("split") == "train":
+            self.data = self.data[:int(len(self.data)*0.9)]
+        else:
+            self.data = self.data[int(len(self.data)*0.9):]
         
         print("Total number of data points in GQA spatial: ", len(self.data))
     
@@ -880,6 +928,34 @@ class LLaVAInstructTune(Dataset):
 
         return return_dict
 
+def get_qa_type(question):
+    question_type = "other"
+    if "how many" in question.lower():
+        question_type = "count"
+    
+    if "how did the camera" in question.lower() or "is the camera moving" in question.lower():
+        question_type = "action_sequence"
+
+    if ("need to go" in question.lower()):
+        question_type = "goal_aim"
+
+    if "any of the objects in the initial" in question.lower():
+        question_type = "obj_movement"
+
+    if "if i" in question.lower():
+        question_type = "action_consequence"
+
+    if "is closer" in question.lower():
+        question_type = "obj_depth"
+    
+    if "considering the relative positions" in question.lower():
+        question_type = "sp_rel"
+
+    if 'estimate the real world distances' in question.lower():
+        question_type = "relative_distance"
+    
+    return question_type
+
 
 class ProcTHOR_reasoning(Dataset):
     def __init__(self, args, tokenizer, image_processor):
@@ -895,30 +971,59 @@ class ProcTHOR_reasoning(Dataset):
         #nav_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas.json'
 
         if args.get("split") == "train":
-            spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_v2_train.json'
-            
+            spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_v2_train.json'           
         else:
             spatial_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_spatial_qas_new_val.json'
+        
+        
+        if args.get("add_complex"):
+            print("Adding complex data")
+            if args.get("split") == "train":
+                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train.json'
+                complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split2.json'
+                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))          
+            else:
+                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val.json'
+                complex_data = json.load(open(complex_qa_json_path))
+            
+            print("Length of complex data: ", len(complex_data))
 
         #nav_data = json.load(open(nav_qa_json_path))
         spatial_data = json.load(open(spatial_qa_json_path))
+        print("Length of spatial data: ", len(spatial_data))
 
         self.data = []
         if args.get("split") == "train":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[:int(len(nav_data)*0.8)]:
             #    self.data.extend(qa_entries)
-            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data:
-                self.data.extend(qa_entries)
+            if not args.get("complex_only"):
+                for house_ind, cam_pos, cam_rot, qa_entries in spatial_data:
+                    self.data.extend(qa_entries)
+            
+            if args.get("add_complex"):
+                for house_ind, cam_pos, cam_rot, qa_entries in complex_data:
+                    self.data.extend(qa_entries)
+
         elif args.get("split") == "valtrain":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.8):int(len(nav_data)*0.9)]:
             #    self.data.extend(qa_entries)
-            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[:int(len(spatial_data)*0.1)]:
-                self.data.extend(qa_entries)
+            if not args.get("complex_only"):
+                for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[:int(len(spatial_data)*0.1)]:
+                    self.data.extend(qa_entries)
+
+            if args.get("add_complex"):
+                for house_ind, cam_pos, cam_rot, qa_entries in complex_data[:int(len(complex_data)*0.1)]:
+                    self.data.extend(qa_entries)
         elif args.get("split") == "val":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.9):]:
             #    self.data.extend(qa_entries)
-            for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0.1):]:
-                self.data.extend(qa_entries)
+            if not args.get("complex_only"):
+                for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0.1):]:
+                    self.data.extend(qa_entries)
+            
+            if args.get("add_complex"):
+                for house_ind, cam_pos, cam_rot, qa_entries in complex_data[int(len(complex_data)*0.1):]:
+                    self.data.extend(qa_entries)
         
         if args.get("split") != "val":
             random.shuffle(self.data)
@@ -930,46 +1035,21 @@ class ProcTHOR_reasoning(Dataset):
         
         question, image_order, answer_choices = qa_entry
 
+        # rephrase a question sometimes (this is hacky, need to add this rephrases to actual data later)
+        if "How did the camera likely move" in question:
+            if random.random() < 0.8:
+                question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
+
+
         # judge the question type
-        question_type = "other"
-        if "how many" in question.lower():
-            question_type = "count"
-        
-        if "did i likely move" in question.lower():
-            question_type = "action_sequence"
-
-        if ("if i" in question.lower() and "the camera?" in question.lower()):
-            question_type = "obj_action_movement"
-
-        if "would i be moving more" in question.lower():
-            question_type = "relative_obj_action_movement"
-
-        if "is closer" in question.lower():
-            question_type = "obj_depth"
-        
-        if "considering the relative positions" in question.lower():
-            question_type = "sp_rel"
-
-        if 'estimate the real world distances' in question.lower():
-            question_type = "relative_distance"
+        question_type = get_qa_type(question)
 
         correct_answer = answer_choices[0]
         
-        hard_distractor = None
-        if question_type == "action_sequence":
-            hard_distractor = answer_choices[2]
-        
-        
-        if hard_distractor is not None:
-            ans_choice_order = ['"'+correct_answer+'"', '"'+answer_choices[1]+'"', '"'+hard_distractor+'"']
-            random.shuffle(ans_choice_order)
-            answer_choices_format = " or ".join(ans_choice_order)
-            question_type+="_hard"
-        else:
-            ans_choice_order = answer_choices
-            ans_choice_order = ['"'+ans+'"' for ans in ans_choice_order]
-            random.shuffle(ans_choice_order)
-            answer_choices_format = " or ".join(ans_choice_order)
+        ans_choice_order = answer_choices
+        ans_choice_order = ['"'+ans+'"' for ans in ans_choice_order]
+        random.shuffle(ans_choice_order)
+        answer_choices_format = " or ".join(ans_choice_order)
         
         image_prompt_format = "<image>"*len(image_order)
 
@@ -1311,6 +1391,14 @@ class AnyImageCaption(Dataset):
 
         return return_dict
 
+def calc_camera_intrinsics(fov_y, frame_height, frame_width):
+    # this functionality is now here to avoid a circularity or duplication issue
+    focal_length = 0.5 * frame_height / math.tan(math.radians(fov_y / 2))
+    f_x = f_y = focal_length
+
+    c_x = frame_width / 2
+    c_y = frame_height / 2
+    return round(f_x, 2), round(f_y, 2), round(c_x, 2), round(c_y, 2)
 
 class ProcTHOR_3DCaptions(Dataset):
     def __init__(self, args, tokenizer, image_processor):
@@ -1349,26 +1437,29 @@ class ProcTHOR_3DCaptions(Dataset):
         marked_frame = frame_path.replace("_0.jpg", "_0_marked.jpg")
 
         prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
-        prefix += "###Human: <im_start><image><im_end> \nHuman: Answer with object names and their precise 3D points."
+        prefix += "###Human: <im_start><image><im_end> \nHuman: Answer with precise 3D coordinate points."
         prefix += "Assume camera is at origin. Camera looks at positive Z, X points to right and Y points upwards. "
         
         if self.args.get("random_point"):
             im_file_path = marked_frame
             img = Image.open(im_file_path).convert("RGB")
-            prompt = f"{prefix} {coordinate_text} {question} ###Assistant: \n"
+            prompt = f"{prefix} {coordinate_text} "
         else:
             im_file_path = frame_path
             img = Image.open(im_file_path).convert("RGB")
-            prompt = f"{prefix} {question} ###Assistant: \n "
-        
+            prompt = f"{prefix} "
+
+        if self.args.get("use_cam_intrinsic"):
+            fx, fy, cx, cy = calc_camera_intrinsics(field_of_view, img.size[1], img.size[0])
+            cam_instrinsic_prompt = f"Camera intrinsic parameters are: focal length x: {fx}, focal length y: {fy}, center point x: {cx}, center point y: {cy}. The image resolution is: {img.size[0]}x{img.size[1]}."
+            prompt = f"{prompt} {cam_instrinsic_prompt} "
+
         if self.split == "train":
-            prompt = f"{prompt} {answer} \n###"
+            prompt = f"{prompt} {question} ###Assistant: \n {answer} \n###"
             text_label = prompt
         else:
-            prompt = f"{prompt} "
+            prompt = f"{prompt} {question} ###Assistant: \n"
             text_label = prompt + answer + " \n###"
-
-        print(prompt)
 
         return [im_file_path,], [img,], prompt, text_label, answer, [answer,], f"procthor_3dcapqa"
     
@@ -1376,7 +1467,7 @@ class ProcTHOR_3DCaptions(Dataset):
         return len(self.data)
     
     def collate_fn(self, batch):
-        image_paths, images, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
 
         new_images = []
         for image_b in images_batch:

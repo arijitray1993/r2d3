@@ -119,7 +119,7 @@ if __name__ == "__main__":
     vis = True
     stats = False
     generate = True
-    load_progress = False
+    load_progress = True
 
     if generate:
         if not os.path.exists(qa_im_path):
@@ -143,7 +143,8 @@ if __name__ == "__main__":
             all_im_qas = json.load(open(qa_json_path, "r"))
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
-            
+            if house_ind<300:
+                continue
             
             house_json = house
 

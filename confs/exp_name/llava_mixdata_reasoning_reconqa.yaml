@@ -9,15 +9,15 @@ batch_size: 1
 lr: 0.000005
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: True # if this is set to True, only the val dataset will be run.
+eval_only: False # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_reconqa/fresh-sun-1_145000
+lora_model_path: False #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_reconqa/fresh-sun-1_200000
 
 eval_every: 5000
-num_eval_steps: 5000
+num_eval_steps: 10
 
 no_shuffle: False
 
@@ -28,7 +28,7 @@ train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
-  num_data_points: 100000,
+  num_data_points: 200000,
   prompt_mode: "text_choice",
   mix_recon_qa: True,
   random_point: True
@@ -49,7 +49,7 @@ val_dataset_choice: "AllMLMBench"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 3000,
+  num_data_points: 5000,
 }
 val_collate_fn: "collate_fn" 
 
@@ -69,5 +69,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-  ['QAAccuracy', 'QAAccuracy', [], []],
+#  ['QAAccuracy', 'QAAccuracy', [], []],
 ]

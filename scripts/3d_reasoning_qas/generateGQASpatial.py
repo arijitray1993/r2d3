@@ -48,6 +48,214 @@ def add_box_dot_with_color(image, box, color):
     return image
 
 
+def generateQAfromAnn(obj_data, obj_count, image, imid, gqa_im_path, mark_AB=False):
+
+    qa_pairs = []
+    if len(obj_data) < 3:
+        continue
+    run_condition = True
+    max_tries = 100
+    while run_condition:
+        max_tries -= 1
+        if max_tries < 0:
+            break
+        obj1, obj2, obj3 = random.sample(obj_data, 3)
+        if obj1[0] == obj2[0] or obj1[0] == obj3[0] or obj2[0] == obj3[0]:
+            continue
+        # if one object bbox inside other object bbox then skip
+        obj1_bbox = [obj1[1], obj1[2], obj1[1] + obj1[3], obj1[2] + obj1[4]]
+        obj2_bbox = [obj2[1], obj2[2], obj2[1] + obj2[3], obj2[2] + obj2[4]]
+        obj3_bbox = [obj3[1], obj3[2], obj3[1] + obj3[3], obj3[2] + obj3[4]]
+
+        obj1_in_obj2 = obj1_bbox[0] > obj2_bbox[0] and obj1_bbox[1] > obj2_bbox[1] and obj1_bbox[2] < obj2_bbox[2] and obj1_bbox[3] < obj2_bbox[3]
+        obj2_in_obj1 = obj2_bbox[0] > obj1_bbox[0] and obj2_bbox[1] > obj1_bbox[1] and obj2_bbox[2] < obj1_bbox[2] and obj2_bbox[3] < obj1_bbox[3]
+        obj1_in_obj3 = obj1_bbox[0] > obj3_bbox[0] and obj1_bbox[1] > obj3_bbox[1] and obj1_bbox[2] < obj3_bbox[2] and obj1_bbox[3] < obj3_bbox[3]
+        obj3_in_obj1 = obj3_bbox[0] > obj1_bbox[0] and obj3_bbox[1] > obj1_bbox[1] and obj3_bbox[2] < obj1_bbox[2] and obj3_bbox[3] < obj1_bbox[3]
+        obj2_in_obj3 = obj2_bbox[0] > obj3_bbox[0] and obj2_bbox[1] > obj3_bbox[1] and obj2_bbox[2] < obj3_bbox[2] and obj2_bbox[3] < obj3_bbox[3]
+        obj3_in_obj2 = obj3_bbox[0] > obj2_bbox[0] and obj3_bbox[1] > obj2_bbox[1] and obj3_bbox[2] < obj2_bbox[2] and obj3_bbox[3] < obj2_bbox[3]
+
+        if obj1_in_obj2 or obj2_in_obj1 or obj1_in_obj3 or obj3_in_obj1 or obj2_in_obj3 or obj3_in_obj2:
+            continue
+        
+        run_condition = False
+
+    if max_tries <= 0:
+        continue
+
+    obj1_desc = obj1[0]
+    obj2_desc = obj2[0]
+    obj3_desc = obj3[0]
+
+    if obj_count[obj1_desc] > -1:
+        if mark_AB:
+            marked_img = add_red_dot_with_text(image, (obj1[1] + obj1[3]//2, obj1[2] + obj1[4]//2), "A")
+            obj1_desc = obj1_desc + " (marked by point A)"
+        else:
+            marked_img = add_box_dot_with_color(image, (obj1[1], obj1[2], obj1[1] + obj1[3], obj1[2] + obj1[4]), "red")
+            obj1_desc = obj1_desc + " (marked by red box)"
+    
+    if obj_count[obj2_desc] > -1:
+        if mark_AB:
+            marked_img = add_red_dot_with_text(image, (obj2[1] + obj2[3]//2, obj2[2] + obj2[4]//2), "B")
+            obj2_desc = obj2_desc + " (marked by point B)"
+        else:
+            marked_img = add_box_dot_with_color(image, (obj2[1], obj2[2], obj2[1] + obj2[3], obj2[2] + obj2[4]), "blue")
+            obj2_desc = obj2_desc + " (marked by blue box)"
+    
+    if obj_count[obj3_desc] > -1:
+        if mark_AB:
+            marked_img = add_red_dot_with_text(image, (obj3[1] + obj3[3]//2, obj3[2] + obj3[4]//2), "C")
+            obj3_desc = obj3_desc + " (marked by point C)"
+        else:
+            marked_img = add_box_dot_with_color(image, (obj3[1], obj3[2], obj3[1] + obj3[3], obj3[2] + obj3[4]), "green")
+            obj3_desc = obj3_desc + " (marked by green box)"
+
+    marked_im_path = f"{gqa_im_path}/{imid}_marked.jpg"
+    marked_img.save(marked_im_path)
+
+    # left right
+    if obj1[1] < obj2[1]:
+        question = "Is the {} to the left or right of the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["left", "right"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Considering the relative positions, where is the {} with respect to the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["left", "right"]
+        qa_pairs.append([question, answer_choices])
+
+    elif obj1[1] > obj2[1]:
+        question = "Is the {} to the left or right of the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["right", "left"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Considering the relative positions, where is the {} with respect to the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["right", "left"]
+        qa_pairs.append([question, answer_choices])
+
+    
+    if obj1[1] < obj3[1]:
+        question = "Considering the relative positions, is the {} to the left or right of the {}?".format(obj1_desc, obj3_desc)
+        answer_choices = ["left", "right"]
+
+        qa_pairs.append([question, answer_choices])
+        
+    elif obj1[1] > obj3[1]:
+        question = "Considering the relative positions, is the {} to the left or right of the {}?".format(obj1_desc, obj3_desc)
+        answer_choices = ["right", "left"]
+
+        qa_pairs.append([question, answer_choices])
+        
+
+
+    # above below
+    if obj1[2] < obj2[2]:
+        question = "Is the {} above or below the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["above", "below"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Considering the relative positions, where is the {} with respect to the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["above", "below"]
+        qa_pairs.append([question, answer_choices])
+
+    elif obj1[2] > obj2[2]:
+        question = "Is the {} above or below the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["below", "above"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Considering the relative positions, where is the {} with respect to the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["below", "above"]
+        qa_pairs.append([question, answer_choices])
+
+    if obj1[2] < obj3[2]:
+        question = "Considering the relative positions, is the {} above or below the {}?".format(obj1_desc, obj3_desc)
+        answer_choices = ["above", "below"]
+
+        qa_pairs.append([question, answer_choices])
+    elif obj1[2] > obj3[2]:
+        question = "Considering the relative positions, is the {} above or below the {}?".format(obj1_desc, obj3_desc)
+        answer_choices = ["below", "above"]
+
+        qa_pairs.append([question, answer_choices])
+
+
+    # behind infront
+    if obj1[5] < obj2[5]:
+        question = "Is the {} further away or in front of the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["in front", "further away"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Is {} behind {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["no", "yes"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Is {} in front of {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["yes", "no"]
+
+        qa_pairs.append([question, answer_choices])
+
+        if mark_AB:
+            question = "Which point is closer to the camera taking this photo, point A or point B?"
+            answer_choices = ["A", "B"]
+            qa_pairs.append([question, answer_choices])
+        else:
+            question = "Which object is closer to the camera taking this photo, the {} or the {}?".format(obj1_desc, obj2_desc)
+            answer_choices = [obj1_desc, obj2_desc]
+            qa_pairs.append([question, answer_choices])
+
+
+    elif obj1[5] > obj2[5]:
+        question = "Is the {} further away or in front of the {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["further away", "in front"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Is {} behind {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["yes", "no"]
+
+        qa_pairs.append([question, answer_choices])
+
+        question = "Is {} in front of {}?".format(obj1_desc, obj2_desc)
+        answer_choices = ["no", "yes"]
+
+        qa_pairs.append([question, answer_choices])
+
+        if mark_AB:
+            question = "Which point is closer to the camera taking this photo, point A or point B?"
+            answer_choices = ["B", "A"]
+            qa_pairs.append([question, answer_choices])
+        else:
+            question = "Which object is closer to the camera taking this photo, the {} or the {}?".format(obj1_desc, obj2_desc)
+            answer_choices = [obj2_desc, obj1_desc]
+            qa_pairs.append([question, answer_choices])
+
+    # relative distance
+    # assume depth is z coordinate and get 3d coordinate for object
+    obj1_3d_loc = [obj1[1], obj1[2], obj1[5]]
+    obj2_3d_loc = [obj2[1], obj2[2], obj2[5]]
+    obj3_3d_loc = [obj3[1], obj3[2], obj3[5]]
+
+    obj12_distance = np.linalg.norm(np.array(obj1_3d_loc) - np.array(obj2_3d_loc))
+    obj13_distance = np.linalg.norm(np.array(obj1_3d_loc) - np.array(obj3_3d_loc))
+
+    if obj12_distance < obj13_distance:
+        question = "Estimate the real world distances between objects in the image. Which object is closer to the {}, the {} or the {}?".format(obj1_desc, obj2_desc, obj3_desc)
+        answer  = [obj2_desc, obj3_desc]
+        qa_pairs.append([question, answer])
+    
+    elif obj12_distance > obj13_distance:
+        question = "Estimate the real world distances between objects in the image. Which object is closer to the {}, the {} or the {}?".format(obj1_desc, obj2_desc, obj3_desc)
+        answer  = [obj3_desc, obj2_desc]
+        qa_pairs.append([question, answer])
+    
+    return qa_pairs
+
+
 
 if __name__=="__main__":
 
@@ -58,7 +266,7 @@ if __name__=="__main__":
     vis = True
     stats = False
     generate = True
-    load_progress = False
+    load_progress = True
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the GQA data
@@ -76,7 +284,9 @@ if __name__=="__main__":
             im_qas_pairs = json.load(open(qa_json_path))
         
         data_count = 0
-        for imid in tqdm.tqdm(gqa_data):
+        for ind, imid in enumerate(tqdm.tqdm(gqa_data)):
+            if ind < 19500:
+                continue
             qa_pairs = []
             mark_AB = random.random() < 0.5
 
@@ -127,135 +337,19 @@ if __name__=="__main__":
                 # get depth at the x, y location
                 x = obj_entry['x']
                 y = obj_entry['y']
+
+                if x < 0 or x >= predicted_depth.shape[3] or y < 0 or y >= predicted_depth.shape[2]:
+                    continue
                 depth = predicted_depth[0, 0, y, x].item()
                 
                 obj_data.append([obj_desc, obj_entry['x'], obj_entry['y'], obj_entry['w'], obj_entry['h'], depth])
 
             # use x,y,depth to make left right, above, below, behind, infront questions
-
-            # choose three objects
-            if len(obj_data) < 3:
-                continue
-            run_condition = True
-            max_tries = 100
-            while run_condition:
-                max_tries -= 1
-                if max_tries < 0:
-                    break
-                obj1, obj2, obj3 = random.sample(obj_data, 3)
-                if obj1[0] == obj2[0] or obj1[0] == obj3[0] or obj2[0] == obj3[0]:
-                    continue
-                # if one object bbox inside other object bbox then skip
-                obj1_bbox = [obj1[1], obj1[2], obj1[1] + obj1[3], obj1[2] + obj1[4]]
-                obj2_bbox = [obj2[1], obj2[2], obj2[1] + obj2[3], obj2[2] + obj2[4]]
-                obj3_bbox = [obj3[1], obj3[2], obj3[1] + obj3[3], obj3[2] + obj3[4]]
-
-                obj1_in_obj2 = obj1_bbox[0] > obj2_bbox[0] and obj1_bbox[1] > obj2_bbox[1] and obj1_bbox[2] < obj2_bbox[2] and obj1_bbox[3] < obj2_bbox[3]
-                obj2_in_obj1 = obj2_bbox[0] > obj1_bbox[0] and obj2_bbox[1] > obj1_bbox[1] and obj2_bbox[2] < obj1_bbox[2] and obj2_bbox[3] < obj1_bbox[3]
-                obj1_in_obj3 = obj1_bbox[0] > obj3_bbox[0] and obj1_bbox[1] > obj3_bbox[1] and obj1_bbox[2] < obj3_bbox[2] and obj1_bbox[3] < obj3_bbox[3]
-                obj3_in_obj1 = obj3_bbox[0] > obj1_bbox[0] and obj3_bbox[1] > obj1_bbox[1] and obj3_bbox[2] < obj1_bbox[2] and obj3_bbox[3] < obj1_bbox[3]
-                obj2_in_obj3 = obj2_bbox[0] > obj3_bbox[0] and obj2_bbox[1] > obj3_bbox[1] and obj2_bbox[2] < obj3_bbox[2] and obj2_bbox[3] < obj3_bbox[3]
-                obj3_in_obj2 = obj3_bbox[0] > obj2_bbox[0] and obj3_bbox[1] > obj2_bbox[1] and obj3_bbox[2] < obj2_bbox[2] and obj3_bbox[3] < obj2_bbox[3]
-
-                if obj1_in_obj2 or obj2_in_obj1 or obj1_in_obj3 or obj3_in_obj1 or obj2_in_obj3 or obj3_in_obj2:
-                    continue
-                
-                run_condition = False
-
-            if max_tries <= 0:
-                continue
-
-            obj1_desc = obj1[0]
-            obj2_desc = obj2[0]
-            obj3_desc = obj3[0]
-
-            if obj_count[obj1_desc] > -1:
-                if mark_AB:
-                    marked_img = add_red_dot_with_text(image, (obj1[1] + obj1[3]//2, obj1[2] + obj1[4]//2), "A")
-                    obj1_desc = obj1_desc + " (marked by point A)"
-                else:
-                    marked_img = add_box_dot_with_color(image, (obj1[1], obj1[2], obj1[1] + obj1[3], obj1[2] + obj1[4]), "red")
-                    obj1_desc = obj1_desc + " (marked by red box)"
+            qa_pairs = generateQAfromAnn(obj_data, obj_count, image, imid, gqa_im_path, mark_AB)
             
-            if obj_count[obj2_desc] > -1:
-                if mark_AB:
-                    marked_img = add_red_dot_with_text(image, (obj2[1] + obj2[3]//2, obj2[2] + obj2[4]//2), "B")
-                    obj2_desc = obj2_desc + " (marked by point B)"
-                else:
-                    marked_img = add_box_dot_with_color(image, (obj2[1], obj2[2], obj2[1] + obj2[3], obj2[2] + obj2[4]), "blue")
-                    obj2_desc = obj2_desc + " (marked by blue box)"
+            if len(qa_pairs) > 0:
+                im_qas_pairs.append([image_file, qa_pairs])
             
-            if obj_count[obj3_desc] > -1:
-                if mark_AB:
-                    marked_img = add_red_dot_with_text(image, (obj3[1] + obj3[3]//2, obj3[2] + obj3[4]//2), "C")
-                    obj3_desc = obj3_desc + " (marked by point C)"
-                else:
-                    marked_img = add_box_dot_with_color(image, (obj3[1], obj3[2], obj3[1] + obj3[3], obj3[2] + obj3[4]), "green")
-                    obj3_desc = obj3_desc + " (marked by green box)"
-
-            marked_im_path = f"{gqa_im_path}/{imid}_marked.jpg"
-            marked_img.save(marked_im_path)
-
-            # left right
-            if obj1[1] < obj2[1]:
-                question = "Is the {} to the left or right of the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["left", "right"]
-
-                qa_pairs.append([question, answer_choices])
-
-            elif obj1[1] > obj2[1]:
-                question = "Is the {} to the left or right of the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["right", "left"]
-
-                qa_pairs.append([question, answer_choices])
-
-            # above below
-            if obj1[2] < obj2[2]:
-                question = "Is the {} above or below the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["above", "below"]
-
-                qa_pairs.append([question, answer_choices])
-
-            elif obj1[2] > obj2[2]:
-                question = "Is the {} above or below the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["below", "above"]
-
-                qa_pairs.append([question, answer_choices])
-
-
-            # behind infront
-            if obj1[5] < obj2[5]:
-                question = "Is the {} behind or in front of the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["behind", "in front"]
-
-                qa_pairs.append([question, answer_choices])
-
-            elif obj1[5] > obj2[5]:
-                question = "Is the {} behind or in front of the {}?".format(obj1_desc, obj2_desc)
-                answer_choices = ["in front", "behind"]
-
-                qa_pairs.append([question, answer_choices])
-
-            # relative distance
-            # assume depth is z coordinate and get 3d coordinate for object
-            obj1_3d_loc = [obj1[1], obj1[2], obj1[5]]
-            obj2_3d_loc = [obj2[1], obj2[2], obj2[5]]
-            obj3_3d_loc = [obj3[1], obj3[2], obj3[5]]
-
-            obj12_distance = np.linalg.norm(np.array(obj1_3d_loc) - np.array(obj2_3d_loc))
-            obj13_distance = np.linalg.norm(np.array(obj1_3d_loc) - np.array(obj3_3d_loc))
-
-            if obj12_distance < obj13_distance:
-                question = "Estimate the real world distances between objects in the image. Which object is closer to the {}, the {} or the {}?".format(obj1_desc, obj2_desc, obj3_desc)
-                answer  = [obj2_desc, obj3_desc]
-                qa_pairs.append([question, answer])
-            
-            elif obj12_distance > obj13_distance:
-                question = "Estimate the real world distances between objects in the image. Which object is closer to the {}, the {} or the {}?".format(obj1_desc, obj2_desc, obj3_desc)
-                answer  = [obj3_desc, obj2_desc]
-                qa_pairs.append([question, answer])
-            
-            im_qas_pairs.append([image_file, qa_pairs])
 
             if len(qa_pairs) > 0:
                 data_count += 1

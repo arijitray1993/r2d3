@@ -1,6 +1,6 @@
 exp_name: instructBLIP_mixdata_reasoning
 device: 'gpu'
-num_workers: 4
+num_workers: 2
 
 
 ### loading checkpoints, eval, train options
@@ -9,16 +9,18 @@ batch_size: 1
 lr: 0.000001
 weight_decay: 0.0001
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 num_warmup_steps: 1000
+lora_rank: 256
+lora_alpha: 512
 
-lora_model_path: False
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/instructBLIP_mixdata_reasoning/stoic-waterfall-9_205000
 
 eval_every: 5000
-num_eval_steps: 10
+num_eval_steps: 2000
 
 no_shuffle: False
 
@@ -29,7 +31,7 @@ train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
-  num_data_points: 100000,
+  num_data_points: 200000,
   prompt_mode: "text_choice",
   instructBLIP: True,
 }

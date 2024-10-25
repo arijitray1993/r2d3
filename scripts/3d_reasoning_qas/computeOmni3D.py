@@ -59,6 +59,10 @@ if __name__=="__main__":
 
         image_file = os.path.join(im_path, imid2image_file[annotation['image_id']][0])
 
+        cam_k = imid2image_file[annotation['image_id']][3]
+        # [f_x, 0, c_x], [0, f_y, c_y], [0, 0, 1]]
+        
+
         center_3d = annotation['center_cam']
 
         bbox_2d = annotation['bbox2D_trunc']
@@ -68,7 +72,7 @@ if __name__=="__main__":
         # image = Image.open(image_file)
         # im_marked = add_box_dot_with_color(image, bbox_2d, 'red')
 
-        img2ann[image_file].append((object_name, center_3d, bbox_2d))
+        img2ann[image_file].append((object_name, center_3d, bbox_2d, cam_k))
 
     with open("omni3d_img2ann.json", "w") as f:
         json.dump(img2ann, f)

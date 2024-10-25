@@ -60,16 +60,82 @@ class ArkitScenes(Dataset):
         if tokenizer is not None:
             self.batch_decode = self.tokenizer.batch_decode
         
-        
+        omnidata = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/3d_reasoning_qas/omni3d_img2ann.json"))
+
+        self.data = []
+        for image_file in omnidata:
+            for object_name, center_3d, bbox_2d, cam_k in omnidata[image_file]:
+                self.data.append((image_file, object_name, center_3d, bbox_2d, cam_k))
+
+        self.data = self.data[:3000]
+
         
     def __getitem__(self, idx):
-        pass
+        
+        image_file, object_name, center_3d, bbox_2d, cam_k = self.data[idx]
+
+        fx = cam_k[0][0]
+        fy = cam_k[1][1]
+        cx = cam_k[0][2]
+        cy = cam_k[1][2]
+
+        img = Image.open(image_file)
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prefix += "###Human: <im_start><image><im_end> \nHuman: Answer with precise 3D coordinate points."
+        prefix += "Assume camera is at origin. Camera looks at positive Z, X points to right and Y points upwards. "
+
+        cam_instrinsic_prompt = f"Camera intrinsic parameters are: focal length x: {fx}, focal length y: {fy}, center point x: {cx}, center point y: {cy}. The image resolution is: {img.size[0]} x {img.size[1]}."
+        prompt = f"{prompt} {cam_instrinsic_prompt} "
+
+        prompt = f"{prompt} {question} ###Assistant: \n"
+        text_label = prompt + answer + " \n###"
+
+        return [im_file_path,], [img,], prompt, text_label, answer, [answer,], f"procthor_3dcapqa"
 
     def __len__(self):
-        pass
+        return len(self.data)
 
     def collate_fn(self, batch):
-        pass
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        new_images = []
+        for image_b in images_batch:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
 
 
 class Stanford2D3DS(Dataset):

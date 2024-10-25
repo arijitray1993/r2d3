@@ -195,7 +195,7 @@ def compute_stats_from_pred_json(json_file):
 if __name__=="__main__":
     
     #json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/GPT4_responses_mlmBench_fixed.json"
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_randompointrecon_MLMBench/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning_MLMBench/output.json"
 
     
     #compute_metrics_from_json(json_file, logger)

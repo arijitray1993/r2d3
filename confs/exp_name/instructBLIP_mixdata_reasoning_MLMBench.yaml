@@ -15,10 +15,10 @@ load_checkpoint: False
 gradient_accumulation_steps: 8
 num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/instructBLIP_mixdata_reasoning/stoic-waterfall-9_200000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/instructBLIP_mixdata_reasoning/stoic-waterfall-9_205000
 
 eval_every: 5000
-num_eval_steps: 5000
+num_eval_steps: 10000
 
 no_shuffle: False
 
@@ -50,7 +50,7 @@ val_dataset_choice: "AllMLMBench"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 3000,
+  num_data_points: 5000,
   instructBLIP: True,
 }
 val_collate_fn: "collate_fn" 
