@@ -141,12 +141,11 @@ if __name__ == "__main__":
         # all_im_qas = json.load(open(qa_json_path, "r"))
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
-            if house_ind < 1129:
-                continue
+            
             house_json = house
 
             try:
-                controller = Controller(scene=house, width=300, height=300, quality="Low") # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
+                controller = Controller(scene=house, width=200, height=200, quality="Low") # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
             except:
                 print("Cannot render environment, continuing")
                 # pdb.set_trace()
@@ -200,7 +199,7 @@ if __name__ == "__main__":
             for cam_pos, cam_rot, _ in random_positions[:1]:
                 qa_pair_choices = []
                 try:
-                    controller = Controller(scene=house_json, width=1024, height=1024, quality="Ultra",  renderInstanceSegmentation=True)
+                    controller = Controller(scene=house_json, width=512, height=512, quality="Ultra",  renderInstanceSegmentation=True)
                 except:
                     print("Cannot render environment, continuing")
                     continue
@@ -220,10 +219,82 @@ if __name__ == "__main__":
 
                 img_view = Image.fromarray(controller.last_event.frame)
 
-                pdb.set_trace()
+                # decide a position to move to with rotation. 
+                random_xy_point = (random.uniform(0.1, 0.9), random.uniform(0.1, 0.9))
+
+                # mark tjhe point on the image
+                img_view = add_red_dot_with_text(img_view, (int(random_xy_point[0]*512), int(random_xy_point[1]*512)), "X")
+                img_marked_path = qa_im_path + f"{house_ind}/im_{sample_count}_marked.png"
+                img_view.save(img_marked_path)
+
+                query = controller.step(
+                    action="GetCoordinateFromRaycast",
+                    x=random_xy_point[0],
+                    y=random_xy_point[1],
+                )
+                location = query.metadata["actionReturn"]
+                location = [location['x'], location['y'], location['z']]
+                curr_rotation = controller.last_event.metadata['agent']['rotation']['y']
                 
+                if random.random() < 0.5:
+                    target_rotation = (curr_rotation + 90) % 360
+                    dir_rotated = "right"
+                else:
+                    target_rotation = (curr_rotation - 90) % 360
+                    dir_rotated = "left"
+
+                controller.step(
+                    action="Teleport",
+                    position=dict(x=location[0], y=location[1], z=location[2]),
+                    rotation=dict(x=0, y=target_rotation, z=0),
+                )
+
+                # get visible objects
+                nav_visible_objects_new, objid2info_new, objdesc2cnt_new, moveable_visible_objs_new = get_current_state(controller)
+
+                # get a list of objects that moved closer and further. 
+                for obj_id in nav_visible_objects:
+                    if obj_id in nav_visible_objects_new:
+                        distance_diff = objid2info_new[obj_id][2] - objid2info[obj_id][2]
+                        if distance_diff > 0.5:
+                            question = f"If I move to the marked point in the image and turned {dir_rotated}, will the {objid2info[obj_id][0]} get closer or further away?"
+                            answer_choices = ["Closer", "Further"]
+                            qa_pair_choices.append((question, [img_marked_path,], ["Closer", "Further"]))
+                        elif distance_diff < -0.5:
+                            question = f"If I move to the marked point in the image and turned {dir_rotated}, will the {objid2info[obj_id][0]} get closer or further away?"
+                            answer_choices = ["Closer", "Further"]
+                            qa_pair_choices.append((question, [img_marked_path,], ["Closer", "Further"]))
                 
-                
+                # make questions about if something will be left or right of me after moving
+                for obj_id in nav_visible_objects:
+                    if obj_id in nav_visible_objects_new:
+                        # get 2d xy pos of objid in og image
+                        obj_pos = objid2info[obj_id][10]
+                        if obj_pos[0] > 512/2 + 50:
+                            dir_obj = "right"
+                        elif obj_pos[0] < 512/2 - 50:
+                            dir_obj = "left"
+                        else:
+                            dir_obj = "roughly straight ahead"
+                    
+                        # get 2d xy pos of objid in new image
+                        obj_pos_new = objid2info_new[obj_id][10]
+                        if obj_pos_new[0] > 512/2 + 50:
+                            dir_obj_new = "right"
+                            wrong_dir_obj_new = "left"
+                        elif obj_pos_new[0] < 512/2 - 50:
+                            dir_obj_new = "left"
+                            wrong_dir_obj_new = "right"
+                        else:
+                            dir_obj_new = "roughly straight ahead"
+                            wrong_dir_obj_new = random.choice(["left", "right"])
+                        
+                        if dir_obj != dir_obj_new:
+                            question = f"If I move to the marked point in the image and turned {dir_rotated}, will the {objid2info[obj_id][0]} be to my left or right?"
+                            answer_choices = [dir_obj_new, wrong_dir_obj_new]
+                            qa_pair_choices.append((question, [img_marked_path,], answer_choices))
+                        
+                all_im_qas.append((house_ind, house_json, cam_pos, qa_pair_choices))
 
 
             if house_ind % 100 == 0:

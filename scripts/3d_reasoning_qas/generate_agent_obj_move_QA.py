@@ -114,8 +114,8 @@ if __name__ == "__main__":
     
     split = "train"
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
-    qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation_{split}/'
-    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}.json'
+    qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation_{split}_v2/'
+    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_v2.json'
     vis = True
     stats = False
     generate = True
@@ -304,7 +304,7 @@ if __name__ == "__main__":
                     f"{obj_name} was moved right and away from the camera in the first frame",
                 ])
 
-                if random.random() < 0.5 and len(moveable_visible_objs) > 0:
+                if random.random() < 0.7 and len(moveable_visible_objs) > 0:
                     obj_to_move = random.choice(moveable_visible_objs)
 
                     #get current coordinates
@@ -332,6 +332,11 @@ if __name__ == "__main__":
                             continue
 
                         if size < 900:
+                            continue
+
+                        # check if object actually moved
+                        moved_obj_pos = controller.last_event.metadata['objects'][obj_to_move]['position']
+                        if np.linalg.norm(np.array([moved_obj_pos['x'], moved_obj_pos['z']]) - np.array([new_pos[0], new_pos[2]])) > 0.1:
                             continue
 
                         if state3.metadata["lastActionSuccess"]:
@@ -426,7 +431,7 @@ if __name__ == "__main__":
 
                     for asset_id, distance, og_distance, asset_cnt in random.sample(obj_distance_changes, min(3, len(obj_distance_changes))):
                         if distance < og_distance:
-                            if random.random()<0.2:
+                            if random.random()<0.3:
                                 if random.random() < 0.5:
                                     question = f"If I {simple_action}, did {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image) move closer to the camera?"
                                     answer_choices = ["yes", "no"]
@@ -480,22 +485,31 @@ if __name__ == "__main__":
                     #angle formed by camera and object
                     angle = int(math.degrees(math.atan2(normalized_pos[0], normalized_pos[1])))
 
-                    if angle < 0:
+                    if angle < -10:
                         angle = abs(int(angle))
                         direction = "left by " + str(angle) + " degrees"
                         wrong_direction = random.choice(["right by " + str(angle) + " degrees", "look straight"])
-                    elif angle > 0:
+                    elif angle > 10:
                         direction = "right by " + str(angle) + " degrees"
                         wrong_direction = random.choice(["left by " + str(angle) + " degrees", "look straight"])
                     else:
                         direction = "look straight"
-                        wrong_direction = random.choice(["left by 30 degrees", "right by 30 degrees"])
+                        wrong_direction = random.choice(["left by 30 degrees", "right by 30 degrees",  "right by 50 degrees",  "left by 40 degrees",  "right by 40 degrees",  "left by 50 degrees"])
                     
                     question = f"I need to go to {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image). Which direction should I turn to face the object?"
                     answer_choices = [direction, wrong_direction]
                     image_order = [new_path_marked]
                     qa_pair_choices.append((question, image_order, answer_choices))
 
+                    question = f"If I turn {wrong_direction}, will I be facing away from {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image)?"
+                    answer_choices = ["yes", "no"]
+                    image_order = [new_path_marked]
+                    qa_pair_choices.append((question, image_order, answer_choices))
+
+                    question = f"If I turn {direction}, will I be facing away from {objid2info[asset_id][5]} (near the mark {asset_cnt} in the image)?"
+                    answer_choices = ["no", "yes"]
+                    image_order = [new_path_marked]
+                    qa_pair_choices.append((question, image_order, answer_choices))
 
                 # pdb.set_trace()
                 if len(qa_pair_choices) > 0:
