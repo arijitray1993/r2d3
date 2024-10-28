@@ -64,6 +64,7 @@ class ArkitScenes(Dataset):
 
         self.data = []
         for image_file in omnidata:
+            pdb.set_trace()
             for object_name, center_3d, bbox_2d, cam_k in omnidata[image_file]:
                 self.data.append((image_file, object_name, center_3d, bbox_2d, cam_k))
 

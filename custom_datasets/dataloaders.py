@@ -57,7 +57,12 @@ from utils.ai2thor_utils import generate_program_from_roomjson, format_program, 
 import numpy as np
 
 from custom_datasets.embodied_ai_datasets import *
-# from custom_datasets.d3_datasets import *
+from custom_datasets.d3_datasets import *
+
+try:
+    from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
+except:
+    pass
 
 
 def stich_image(images):
@@ -322,6 +327,37 @@ def interleave_iterators(*iterators):
                 finished[i] = True
         stop_cond = functools.reduce(lambda x,y:not x or not y,finished)
 
+def get_inputs_for_model(imgs, prompts, tokenizer=None, image_processor=None, model_choice=None):
+
+    if model_choice == "llava_ov":
+        inputs = image_processor(text=prompts, images=imgs, return_tensors='pt').to(torch.float16)
+        return inputs['pixel_values'], inputs['input_ids'], inputs['attention_mask'], inputs['image_sizes']
+
+    if model_choice == "llava":
+        new_images = []
+        for image_b in imgs:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+
+        return pixel_values, input_ids, attention_mask
 
 class MixLLavaProcthor(Dataset):
     def __init__(self, args, tokenizer, image_processor):
@@ -576,7 +612,13 @@ class CustomMix(Dataset):
             self.all_mix.append(self.gqa_spatial)
             self.weights.append(mix_datas["gqa_spatial"])
             self.all_lens.append(len(self.gqa_spatial))
-
+        
+        if "VSR_VRD25D" in mix_datas:
+            self.vsr_vrd25d = VSR_VRD25D(args, tokenizer, image_processor)
+            self.all_mix.append(self.vsr_vrd25d)
+            self.weights.append(mix_datas["VSR_VRD25D"])
+            self.all_lens.append(len(self.vsr_vrd25d))
+        
         print("combined data ...")
 
         print("Total number of data points: ", sum(self.all_lens))
@@ -607,6 +649,18 @@ class CustomMix(Dataset):
                 "dataset": datanames,
                 "answers": answers,
                 "answer_choices": answer_choices,
+            }
+        elif self.args.get("llava_ov"):
+            
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images_batch, prompts, None, self.image_processor, model_choice="llava_ov")
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "image_sizes": image_sizes,
             }
         else:
             new_images = []
@@ -647,7 +701,7 @@ class CustomMix(Dataset):
         return return_dict
 
 
-class VSRDataset(Dataset):
+class VSR_VRD25D(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
         self.tokenizer = tokenizer
@@ -658,8 +712,10 @@ class VSRDataset(Dataset):
         dataset = load_dataset("cambridgeltl/vsr_random", data_files=data_files)
         self.coco_path = "/projectnb/ivc-ml/array/data/COCO/images/"
 
+        vrd_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/vrd_qa_data.json"
+
         self.data = []
-        for entry in dataset:
+        for entry in dataset['train']:
             image_path = entry["image_link"]
             image_path = image_path.split("/")[-2:]
             image_path = os.path.join(self.coco_path, *image_path)
@@ -676,15 +732,93 @@ class VSRDataset(Dataset):
 
             question = f"Is {subject} {relation} the {object}?"
             answer = "yes" if label == 1 else "no"
+            wrong_answer = "no" if label == 1 else "yes"
 
-            self.data.append((image_path, question, answer))
+            self.data.append((image_path, question, [answer, wrong_answer]))
 
-            
+        vrd25data = json.load(open(vrd_path))
+        v25_data = []
+        for img, qa_entries in vrd25data:
+            for question, answers in qa_entries:
+                v25_data.append((img, question, answers))
+        
+        print("Total number of data points in VSR: ", len(self.data))
+        print("Total number of data points in VRD25D: ", len(v25_data))
 
+        self.data += random.sample(v25_data, 100000)
 
+        random.shuffle(self.data)
 
-class VR25D(Dataset):
-    pass
+        if args.get("split") != "train": # we never use this for val reporting, only valtrain. 
+            self.data = self.data[int(len(self.data)*0.9):]
+
+        print("Total number of data points in VSR_VRD25D: ", len(self.data))
+    
+    def __getitem__(self, idx):
+        im_file, question, answer = self.data[idx]
+        
+        correct_answer = answer[0]
+
+        ans_choice_order = ['"'+ans+'"' for ans in answer]
+        random.shuffle(ans_choice_order)
+        answer_choices_format = " or ".join(ans_choice_order) 
+
+        #if im_file is not None:
+        img = [Image.open(im_file).convert("RGB"),]
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        if self.args['mode'] == "train":
+            prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}. ###Assistant: \n {correct_answer} \n###"
+            text_labels = prompt
+        else:
+            prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}. ###Assistant: \n "
+            text_labels = prompt + correct_answer + " \n###"        
+
+        
+        return [im_file,], img, prompt, text_labels, correct_answer, answer, "vsr25d_spatial"
+    
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+        new_images = []
+        for image_b in images_batch:
+            for image in image_b:
+                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                # pdb.set_trace()
+                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                new_images.append(image)
+
+        pixel_values = torch.stack(new_images, dim=0)
+
+        input_ids = []
+        attention_mask = []
+        for prompt in prompts:
+            # pdb.set_trace()
+            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_ids.append(input_id)
+            attention_mask.append(torch.ones_like(input_id))
+        
+        # pad with zeros
+        # pdb.set_trace()
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
 
 
 class GQASpatial(Dataset):
@@ -724,6 +858,7 @@ class GQASpatial(Dataset):
         answer_choices_format = " or ".join(ans_choice_order) 
 
         #if im_file is not None:
+        im_file = im_file.replace(".jpg", "_marked.jpg")
         img = [Image.open(im_file).convert("RGB"),]
 
         prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
@@ -799,7 +934,6 @@ class GQASpatial(Dataset):
         return return_dict
 
 
-
 class LLaVAInstructTune(Dataset):
     def __init__(self, args, tokenizer, image_processor):
         self.args = args
@@ -808,7 +942,7 @@ class LLaVAInstructTune(Dataset):
         if tokenizer is not None:
             self.batch_decode = self.tokenizer.batch_decode
         
-        if args.get("instructBLIP") or args.get("BLIP2"):
+        if args.get("llava_ov"):
             self.batch_decode = self.image_processor.batch_decode
 
         json_data = json.load(open("/projectnb/ivc-ml/array/data/llava_data/llava_v1_5_mix665k.json"))
@@ -865,6 +999,19 @@ class LLaVAInstructTune(Dataset):
                 else:
                     prompt = f"Question: {question} Answer: "
                     text_labels = prompt + answer + "###"
+        elif self.args.get("llava_ov"):
+            """
+            <|im_start|>user <image>\nWhat is shown in this image?<|im_end|><|im_start|>assistant \nThere is a red stop sign in the image.<|im_end|><|im_start|>user <image>\nWhat about this image? How many cats do you see?<|im_end|><|im_start|>assistant\n'
+            """
+            image_prompt_format = "<|im_start|>user  <image>\n <|im_end|>"*len(img)
+            image_prompt_format = image_prompt_format[:-len("<|im_end|>")]
+            if self.args['mode'] == "train":
+                prompt = f"{image_prompt_format}{question} <|im_end|><|im_start|>assistant: \n {answer} <|im_end|>"
+                text_labels = prompt
+            else:
+                prompt = f"{image_prompt_format}{question} <|im_end|><|im_start|>assistant: \n"
+                text_labels = prompt + answer + " <|im_end|>"
+            
         else:
         
             image_prompt_format = "<image>"*len(img)
@@ -893,38 +1040,29 @@ class LLaVAInstructTune(Dataset):
 
     def collate_fn(self, batch):
         image_paths, imgs, captions, prompts, text_labels, program_texts, house_jsons, objs_present = zip(*batch)
-        new_images = []
-        for image_b in imgs:
-            for image in image_b:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                # pdb.set_trace()
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                new_images.append(image)
-
-        pixel_values = torch.stack(new_images, dim=0)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
+        
+        if self.args.get("llava_ov"):
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(imgs, prompts, None, self.image_processor, model_choice="llava_ov")
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "image_sizes": image_sizes,
+            }
+        else:
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(imgs, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        
-        # pad with zeros
-        # pdb.set_trace()
-        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
-        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
-        
-        # pdb.set_trace()
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            'pixel_values': pixel_values,
-            "labels": input_ids,
-            "prompts": prompts,
-            "text_labels": text_labels,
-        }
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+            }
 
         return return_dict
 
@@ -981,7 +1119,8 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("split") == "train":
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train.json'
                 complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split2.json'
-                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))          
+                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))    
+                   
             else:
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val.json'
                 complex_data = json.load(open(complex_qa_json_path))
@@ -1037,7 +1176,7 @@ class ProcTHOR_reasoning(Dataset):
 
         # rephrase a question sometimes (this is hacky, need to add this rephrases to actual data later)
         if "How did the camera likely move" in question:
-            if random.random() < 0.8:
+            if random.random() < 0.7:
                 question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
 
 
@@ -1064,6 +1203,20 @@ class ProcTHOR_reasoning(Dataset):
                 else:
                     prompt = f"Question: {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}. Answer: "
                     text_label = prompt + correct_answer + "###"
+        elif self.args.get("llava_ov"):
+            
+            """
+            <|im_start|>user <image>\nWhat is shown in this image?<|im_end|><|im_start|>assistant \nThere is a red stop sign in the image.<|im_end|><|im_start|>user <image>\nWhat about this image? How many cats do you see?<|im_end|><|im_start|>assistant\n'
+            """
+            image_prompt_format = "<|im_start|>user:  <image>\n <|im_end|>"*len(image_order)
+            image_prompt_format = image_prompt_format[:-len("<|im_end|>")]
+            if self.args['mode'] == "train":
+                prompt = f"{image_prompt_format}{question} Choose between the following options: {answer_choices_format} <|im_end|><|im_start|>assistant: \n {correct_answer} <|im_end|>"
+                text_label = prompt
+            else:
+                prompt = f"{image_prompt_format}{question} Choose between the following options: {answer_choices_format} <|im_end|><|im_start|>assistant: \n"
+                text_label = prompt + correct_answer + " <|im_end|>"
+                
         else:
             if self.args['prompt_mode'] == "zero_shot":
                 '''
@@ -1115,46 +1268,24 @@ class ProcTHOR_reasoning(Dataset):
     def collate_fn(self, batch):
         image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
 
-        if self.args.get("instructBLIP"):
-            # only works with batch size 1 for now change later. 
-            inputs = self.image_processor(images=images_batch[0], text=prompts[0], return_tensors="pt")
+        if self.args.get("llava_ov"):
+            
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images_batch, prompts, None, self.image_processor, model_choice="llava_ov")
+            
             return_dict = {
-                "input_ids": inputs["input_ids"],
-                "attention_mask": inputs["attention_mask"],
-                'qformer_input_ids': inputs["qformer_input_ids"],
-                'qformer_attention_mask': inputs["qformer_attention_mask"],
-                'pixel_values': inputs["pixel_values"],
-                "labels": inputs["input_ids"],
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
                 "prompts": prompts,
                 "text_labels": text_labels,
+                "image_sizes": image_sizes,
                 "dataset": datanames,
                 "answers": answers,
                 "answer_choices": answer_choices,
             }
         else:
-            new_images = []
-            for image_b in images_batch:
-                for image in image_b:
-                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                    # pdb.set_trace()
-                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                    new_images.append(image)
-
-            pixel_values = torch.stack(new_images, dim=0)
-
-            input_ids = []
-            attention_mask = []
-            for prompt in prompts:
-                # pdb.set_trace()
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            
-            # pad with zeros
-            # pdb.set_trace()
-            input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
-            attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
-            
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
             return_dict = {
                 "input_ids": input_ids,
@@ -1461,6 +1592,17 @@ class ProcTHOR_3DCaptions(Dataset):
             prompt = f"{prompt} {question} ###Assistant: \n"
             text_label = prompt + answer + " \n###"
 
+        if self.args.get("llava_ov"):
+            
+            """
+            <|im_start|>user <image>\nWhat is shown in this image?<|im_end|><|im_start|>assistant \nThere is a red stop sign in the image.<|im_end|><|im_start|>user <image>\nWhat about this image? How many cats do you see?<|im_end|><|im_start|>assistant\n'
+            """
+            image_prompt_format = "<|im_start|>user  <image>\n <|im_end|>"*1
+            image_prompt_format = image_prompt_format[:-len("<|im_end|>")]
+            
+            prompt = f"{image_prompt_format}{cam_instrinsic_prompt} {question} <|im_end|><|im_start|>assistant: \n"
+            text_label = prompt + answer + " <|im_end|>"
+
         return [im_file_path,], [img,], prompt, text_label, answer, [answer,], f"procthor_3dcapqa"
     
     def __len__(self):
@@ -1469,41 +1611,34 @@ class ProcTHOR_3DCaptions(Dataset):
     def collate_fn(self, batch):
         image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
 
-        new_images = []
-        for image_b in images_batch:
-            for image in image_b:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                # pdb.set_trace()
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                new_images.append(image)
-
-        pixel_values = torch.stack(new_images, dim=0)
-
-        input_ids = []
-        attention_mask = []
-        for prompt in prompts:
+        if self.args.get("llava_ov"):
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images_batch, prompts, None, self.image_processor, model_choice="llava_ov")
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "image_sizes": image_sizes,
+                "dataset": datanames,
+                "answers": answers,
+                "answer_choices": answer_choices,
+            }
+        else:
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-            input_ids.append(input_id)
-            attention_mask.append(torch.ones_like(input_id))
-        
-        # pad with zeros
-        # pdb.set_trace()
-        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
-        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
-        
-        # pdb.set_trace()
-        return_dict = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            'pixel_values': pixel_values,
-            "labels": input_ids,
-            "prompts": prompts,
-            "text_labels": text_labels,
-            "dataset": datanames,
-            "answers": answers,
-            "answer_choices": answer_choices,
-        }
+            return_dict = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
+                "prompts": prompts,
+                "text_labels": text_labels,
+                "dataset": datanames,
+                "answers": answers,
+                "answer_choices": answer_choices,
+            }
 
         return return_dict
 
@@ -2447,20 +2582,34 @@ class CVBench(Dataset):
 
         type_task = self.data['type'][idx] + "_" + self.data['task'][idx]
         
-        if self.args.get("zero_shot_mode"):
-            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {choice_format}.###Assistant: \n "
-        elif self.args.get("zero_shot_choice_mode"):
-            prompt = self.data['prompt'][idx]
-            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: {prompt} ###Assistant: \n "
-            answer = self.data['answer'][idx]
+        
 
         if self.args.get("instructBLIP") or self.args.get("BLIP2"):
             if self.args.get("zero_shot_mode"):
                 prompt = f"{question} Choose between the following options: {choice_format}?"
             else:
                 prompt = f"Question: {question} Answer the question using a single word or phrase. Choose between the following options: {choice_format}. Answer: "
+        elif self.args.get("llava_ov"):
+            
+            """
+            <|im_start|>user <image>\nWhat is shown in this image?<|im_end|><|im_start|>assistant \nThere is a red stop sign in the image.<|im_end|><|im_start|>user <image>\nWhat about this image? How many cats do you see?<|im_end|><|im_start|>assistant\n'
+            """
+            image_prompt_format = "<|im_start|>user  <image>\n <|im_end|>"*1
+            image_prompt_format = image_prompt_format[:-len("<|im_end|>")]
+            
+            prompt = f"{image_prompt_format}{question} Choose between the following options: {choice_format} <|im_end|><|im_start|>assistant: \n"
+            text_label = prompt + answer
+        else:
+            if self.args.get("zero_shot_mode"):
+                prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {choice_format}.###Assistant: \n "
+            elif self.args.get("zero_shot_choice_mode"):
+                prompt = self.data['prompt'][idx]
+                prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: {prompt} ###Assistant: \n "
+                answer = self.data['answer'][idx]
+            text_label = prompt + answer
+        
 
-        text_label = prompt + answer
+        
         # pdb.set_trace()
         return [image,], prompt, text_label, answer, f"cvbench_{type_task}"
         
@@ -2470,61 +2619,32 @@ class CVBench(Dataset):
     def collate_fn(self, batch):
         images, prompts, text_labels, answers, datanames = zip(*batch)
 
-        if self.args.get("instructBLIP"):
-            # only works with batch size 1 for now change later. 
-            if len(images[0]) > 1:
-                #stich the images together 
-                img = stich_image([image for image in images[0]])
-            else:
-                img = images[0][0]
-
-            inputs = self.image_processor(images=img, text=prompts[0], return_tensors="pt")
+        if self.args.get("llava_ov"):
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images, prompts, None, self.image_processor, model_choice="llava_ov")
             return_dict = {
-                "input_ids": inputs["input_ids"],
-                "attention_mask": inputs["attention_mask"],
-                'qformer_input_ids': inputs["qformer_input_ids"],
-                'qformer_attention_mask': inputs["qformer_attention_mask"],
-                'pixel_values': inputs["pixel_values"],
-                "labels": inputs["input_ids"],
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
                 "prompts": prompts,
                 "text_labels": text_labels,
+                "image_sizes": image_sizes,
                 "dataset": datanames,
                 "answers": answers,
             }
         else:
-            new_images = []
-            for image_b in images:
-                for image in image_b:
-                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                    # pdb.set_trace()
-                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                    new_images.append(image)
-
-            pixel_values = torch.stack(new_images, dim=0)
-
-            input_ids = []
-            attention_mask = []
-            for prompt in prompts:
-                # pdb.set_trace()
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            input_ids = torch.stack(input_ids, dim=0)
-            attention_mask = torch.stack(attention_mask, dim=0)
-
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
             return_dict = {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 'pixel_values': pixel_values,
+                "labels": input_ids,
                 "prompts": prompts,
-                'answers': answers,
-                'dataset': datanames,
-                'labels': input_ids,
                 "text_labels": text_labels,
-                'images': images
+                "dataset": datanames,
+                "answers": answers,
             }
-            # pdb.set_trace()
 
         return return_dict
 
@@ -2596,6 +2716,16 @@ class BLINK(Dataset):
             else:
                 prompt = f"Question: {question} Answer the question using a single word or phrase. Choose between the following options: {choice_format}. Answer: "
             text_label = prompt + answer
+        elif self.args.get("llava_ov"):
+            
+            """
+            <|im_start|>user <image>\nWhat is shown in this image?<|im_end|><|im_start|>assistant \nThere is a red stop sign in the image.<|im_end|><|im_start|>user <image>\nWhat about this image? How many cats do you see?<|im_end|><|im_start|>assistant\n'
+            """
+            image_prompt_format = "<|im_start|>user  <image>\n <|im_end|>"*len(images)
+            image_prompt_format = image_prompt_format[:-len("<|im_end|>")]
+            
+            prompt = f"{image_prompt_format}{question} Choose between the following options: {choice_format} <|im_end|><|im_start|>assistant: \n"
+            text_label = prompt + answer
         
 
         # pdb.set_trace()
@@ -2607,52 +2737,31 @@ class BLINK(Dataset):
     def collate_fn(self, batch):
         images, prompts, text_labels, answers, subtasks = zip(*batch)
 
-        if self.args.get("instructBLIP"):
-            # only works with batch size 1 for now change later. 
-            inputs = self.image_processor(images=images[0], text=prompts[0], return_tensors="pt")
+        if self.args.get("llava_ov"):
+            pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images, prompts, None, self.image_processor, model_choice="llava_ov")
             return_dict = {
-                "input_ids": inputs["input_ids"],
-                "attention_mask": inputs["attention_mask"],
-                'qformer_input_ids': inputs["qformer_input_ids"],
-                'qformer_attention_mask': inputs["qformer_attention_mask"],
-                'pixel_values': inputs["pixel_values"],
-                "labels": inputs["input_ids"],
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                'pixel_values': pixel_values,
+                "labels": input_ids,
                 "prompts": prompts,
                 "text_labels": text_labels,
+                "image_sizes": image_sizes,
                 "dataset": datanames,
                 "answers": answers,
             }
         else:
-            new_images = []
-            for image_b in images:
-                for image in image_b:
-                    image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
-                    # pdb.set_trace()
-                    image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-                    new_images.append(image)
-
-            pixel_values = torch.stack(new_images, dim=0)
-
-            input_ids = []
-            attention_mask = []
-            for prompt in prompts:
-                # pdb.set_trace()
-                input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
-                input_ids.append(input_id)
-                attention_mask.append(torch.ones_like(input_id))
-            input_ids = torch.stack(input_ids, dim=0)
-            attention_mask = torch.stack(attention_mask, dim=0)
-
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
             return_dict = {
                 "input_ids": input_ids,
-                'labels': input_ids,
-                'text_labels': text_labels,
                 "attention_mask": attention_mask,
                 'pixel_values': pixel_values,
+                "labels": input_ids,
                 "prompts": prompts,
-                'answers': answers,
-                'dataset': subtasks,
+                "text_labels": text_labels,
+                "dataset": datanames,
+                "answers": answers,
             }
         # pdb.set_trace()
         return return_dict

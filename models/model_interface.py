@@ -31,6 +31,11 @@ from llava.mm_utils import get_model_name_from_path
 from llava.eval.run_llava import eval_model
 from llava.mm_utils import KeywordsStoppingCriteria
 
+try:
+    from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
+except:
+    pass
+
 
 class Blip2ModelInterface(nn.Module):
     def __init__(self, args):
@@ -543,6 +548,50 @@ class LlavaNext_13B_Interface(nn.Module):
             return_dict=True,
             labels=labels,
             attention_mask=attention_mask)
+        # pdb.set_trace()
+        
+        return outputs
+
+
+class LLaVA_OV_Interface(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.model = LlavaOnevisionForConditionalGeneration.from_pretrained("llava-hf/llava-onevision-qwen2-7b-ov-hf", torch_dtype=torch.float16, device_map="auto")
+        self.image_processor = AutoProcessor.from_pretrained("llava-hf/llava-onevision-qwen2-7b-ov-hf")
+
+        self.tokenizer = self.image_processor.tokenizer
+        self.max_new_tokens = args['max_new_tokens']
+
+    
+    def generate(self, input_ids, pixel_values=None, attention_mask=None, labels=None, image_sizes=None):
+        
+        #pdb.set_trace()
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+        
+        output_ids = self.model.generate(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            max_new_tokens=self.max_new_tokens,
+            attention_mask=attention_mask,
+            image_sizes=image_sizes
+        )
+        # pdb.set_trace()
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values=None, attention_mask=None, labels=None, image_sizes=None):
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+
+        outputs =  self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            output_hidden_states=False,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask,
+            image_sizes=image_sizes)
         # pdb.set_trace()
         
         return outputs

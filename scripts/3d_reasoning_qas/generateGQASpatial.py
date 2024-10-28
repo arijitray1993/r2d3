@@ -52,7 +52,7 @@ def generateQAfromAnn(obj_data, obj_count, image, imid, gqa_im_path, mark_AB=Fal
 
     qa_pairs = []
     if len(obj_data) < 3:
-        continue
+        return qa_pairs
     run_condition = True
     max_tries = 100
     while run_condition:
@@ -80,7 +80,7 @@ def generateQAfromAnn(obj_data, obj_count, image, imid, gqa_im_path, mark_AB=Fal
         run_condition = False
 
     if max_tries <= 0:
-        continue
+        return qa_pairs
 
     obj1_desc = obj1[0]
     obj2_desc = obj2[0]
@@ -349,9 +349,6 @@ if __name__=="__main__":
             
             if len(qa_pairs) > 0:
                 im_qas_pairs.append([image_file, qa_pairs])
-            
-
-            if len(qa_pairs) > 0:
                 data_count += 1
                 if data_count %10 == 0:
                     json.dump(im_qas_pairs, open(qa_json_path, 'w'))

@@ -1,4 +1,4 @@
-exp_name: llava_mixdata_IT_3dcapqa_complexreasoning_MLMBench
+exp_name: llava_mixdata_IT_GQAVSR_procthor_3dcapqa
 device: 'gpu'
 num_workers: 4
 
@@ -9,18 +9,17 @@ batch_size: 1
 lr: 0.000003
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: True # if this is set to True, only the val dataset will be run.
+eval_only: False # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 lora_rank: 256
 lora_alpha: 512
-num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning_moretrain/super-dew-1_55000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/ancient-oath-2_230000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_GQAVSR_procthor_3dcapqa/revived-wave-2_80000
 
 eval_every: 5000
-num_eval_steps: 10000
+num_eval_steps: 20
 
 no_shuffle: False
 
@@ -35,9 +34,11 @@ train_dataset_args: {
   prompt_mode: "text_choice",
   add_complex: True,
   mix_datas: {
-    'llavaIT': 0.3,
-    'thor_reasoning': 0.35,
-    'thor_3dcapqa': 0.35
+    'llavaIT': 0.1,
+    'VSR_VRD25D': 0.2,
+    'thor_reasoning': 0.25,
+    'gqa_spatial': 0.2,
+    'thor_3dcapqa': 0.25,
   },
   use_cam_intrinsic: True,
 }
@@ -45,7 +46,7 @@ train_collate_fn: "collate_fn"
 
 
 ## define your valtrain dataset, the name must match the class name in datasets/dataloaders.py. This is run during training to help choose best checkpoint
-valtrain_dataset_choice: "ProcTHOR_reasoning"
+valtrain_dataset_choice: "GQASpatial"
 valtrain_dataset_args: {
   split: "valtrain",
   mode: "val",
@@ -77,5 +78,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-  ['QAAccuracy', 'QAAccuracy', [], []],
+#  ['QAAccuracy', 'QAAccuracy', [], []],
 ]

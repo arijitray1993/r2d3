@@ -1792,34 +1792,43 @@ class QAAccuracy:
         self.logger = args['logger']
         self.exp_folder = os.path.join("checkpoints", args['exp_name'])
         self.table = wandb.Table(columns=["DataName", "Question", "GT Answer", "Pred Answer", "Correct", "Image"])
-        self.log_table = False if args['log_table'] == False else True
+        self.log_table = args.get('log_table', False)
     
     def update(self, output, gt):
         
         data_name = gt['dataset'][0]
         gt_question = gt['prompts'][0]
         gt_answers = gt['answers']
-        pred_answers = output
+        pred_answers = output[0].strip()
 
         format_answer = pred_answers.split("###")[0].strip().lower()
         
         if format_answer == "":
-            if "###Human" in pred_answers:
-                try:
-                    format_answer = pred_answers.split("###Human:")[1].split("###")[0].strip().lower()
-                except:
-                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
-            elif "###Assistant" in pred_answers:
+            if "###Assistant" in pred_answers:
                 try:
                     format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
                 except:
                     format_answer = pred_answers.split("###")[0].strip().lower()
+            elif "###Human" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Human:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
             else:
                 format_answer = pred_answers.split("###")[0].strip().lower().split(".")[0]
 
         if gt_answers[0] in ["yes", "no"]:
             if format_answer not in ["yes", "no"]:
-                format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+                try:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###")[0].strip().lower()
+        
+        if format_answer == "ight": # a bug in prediction parsing, fix later
+            format_answer = "right"
+        
+        if "ight stand" in format_answer:
+            format_answer = format_answer.replace("ight stand", "night stand")
 
         # pdb.set_trace()
         format_answer_words = [format_answer,]
@@ -1954,11 +1963,12 @@ class QAAccuracyBatch:
         self.logger = args['logger']
         self.exp_folder = os.path.join("checkpoints", args['exp_name'])
         self.table = wandb.Table(columns=["DataName", "Question", "GT Answer", "Pred Answer", "Correct", "Image"])
+        self.log_table = args.get('log_table', False)
     
     def update(self, output, gt):
         
-        data_name = gt['dataset']
-        gt_question = gt['prompts']
+        data_name = gt['dataset'][0]
+        gt_question = gt['prompts'][0]
         gt_answers = gt['answers']
         pred_answers = output
 
@@ -1977,6 +1987,17 @@ class QAAccuracyBatch:
                     format_answer = pred_answers.split("###")[0].strip().lower()
             else:
                 format_answer = pred_answers.split("###")[0].strip().lower().split(".")[0]
+
+        if gt_answers[0] in ["yes", "no"]:
+            if format_answer not in ["yes", "no"]:
+                format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+        
+        if format_answer == "ight": # a bug in prediction parsing, fix later
+            format_answer = "right"
+        
+        if "ight stand" in format_answer:
+            format_answer = format_answer.replace("ight stand", "night stand")
+
 
         # pdb.set_trace()
         format_answer_words = [format_answer,]
@@ -2045,7 +2066,7 @@ class QAAccuracyBatch:
 
         if "answer:" in format_answer_words[0]:
             format_answer_words = [format_answer_words[0].split("answer: ")[1].split(" ")[0].strip().lower()]
-        
+
 
         correct = 0
         for word in gt_answer_words:
@@ -2060,19 +2081,20 @@ class QAAccuracyBatch:
 
         self.outputs.append((gt_question, gt_answers, pred_answers, data_name, correct))
 
-        if 'considering the relative positions' in gt_question.lower():
-            if random.random() < 0.2:
+        if self.log_table:
+            if 'considering the relative positions' in gt_question.lower():
+                if random.random() < 0.2:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+            elif 'cvbench' in data_name:
+                if random.random() < 0.4:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
+            else:
+                if random.random() < 0.1:
+                    self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))    
+            
+            
+            if data_name == "BLINK_Spatial_Relation":
                 self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
-        elif 'cvbench' in data_name:
-            if random.random() < 0.4:
-                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
-        else:
-            if random.random() < 0.1:
-                self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))    
-        
-        
-        if data_name == "BLINK_Spatial_Relation":
-            self.table.add_data(data_name, gt_question, gt_answers, pred_answers, correct, wandb.Image(gt['images'][0][0]))
 
 
         
@@ -2097,7 +2119,9 @@ class QAAccuracyBatch:
             print("Num data points: ", len(data_accs[data_name]))
             self.logger.log({f"{data_name}_acc": acc})
         
-        self.logger.log({"SPrel_examples": self.table})
+        if self.log_table:
+            self.logger.log({"SPrel_examples": self.table})
+
 
 
 
@@ -2181,12 +2205,12 @@ class ReasoningAccuracy:
         gt_question = gt['prompts']
         gt_answers = gt['answers']
         answer_choices = gt['answer_choices'][0]
-        pred_answers = output
+        pred_answers = output[0].strip()
 
         format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
         gt_answer = gt_answers[0].lower().strip()
 
-        correct = gt_answer in format_answer
+        correct = gt_answer in format_answer or format_answer in gt_answer
 
         incorrect_answers = [ans for ans in answer_choices if gt_answer not in ans.lower().strip()]
 
