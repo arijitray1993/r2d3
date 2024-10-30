@@ -337,9 +337,9 @@ def get_inputs_for_model(imgs, prompts, tokenizer=None, image_processor=None, mo
         new_images = []
         for image_b in imgs:
             for image in image_b:
-                image = expand2square(image, tuple(int(x*255) for x in self.image_processor.image_mean))
+                image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
                 # pdb.set_trace()
-                image = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
                 new_images.append(image)
 
         pixel_values = torch.stack(new_images, dim=0)
@@ -348,7 +348,7 @@ def get_inputs_for_model(imgs, prompts, tokenizer=None, image_processor=None, mo
         attention_mask = []
         for prompt in prompts:
             # pdb.set_trace()
-            input_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+            input_id = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
             input_ids.append(input_id)
             attention_mask.append(torch.ones_like(input_id))
         
@@ -1119,13 +1119,25 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("split") == "train":
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train.json'
                 complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split2.json'
-                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))    
+                complex_qa_json_path_split3 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split3.json'
+                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2)) + json.load(open(complex_qa_json_path_split3))
                    
             else:
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val.json'
                 complex_data = json.load(open(complex_qa_json_path))
             
             print("Length of complex data: ", len(complex_data))
+
+        if args.get("add_perspective"):
+            print("Adding perspective data")
+            if args.get("split") == "train":
+                perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas.json'
+                perspective_data = json.load(open(perspective_qa_json_path))
+            else:
+                perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas_val.json'
+                perspective_data = json.load(open(perspective_qa_json_path))
+            
+            print("Length of perspective data: ", len(perspective_data))
 
         #nav_data = json.load(open(nav_qa_json_path))
         spatial_data = json.load(open(spatial_qa_json_path))
@@ -1141,7 +1153,19 @@ class ProcTHOR_reasoning(Dataset):
             
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data:
-                    self.data.extend(qa_entries)
+                    for question, im_order, answers in qa_entries:
+                        question = question.replace("turn look straight", "look straight")
+                        self.data.append((question, im_order, answers))
+                
+                if args.get("add_perspective"):
+                    for _,_,_, qa_entries in perspective_data:
+                        for question, im_order, answers in qa_entries:
+                            question = question.replace("turned towards the", "facing 90 degrees to the")
+                            question = question.replace("turned right", "turned right by 90 degrees")
+                            question = question.replace("turned left", "turned left by 90 degrees")
+
+                            self.data.append((question, im_order, answers))
+                        # pdb.set_trace()
 
         elif args.get("split") == "valtrain":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.8):int(len(nav_data)*0.9)]:
@@ -1153,6 +1177,11 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data[:int(len(complex_data)*0.1)]:
                     self.data.extend(qa_entries)
+                
+                if args.get("add_perspective"):
+                    for _,_,_, qa_entries in perspective_data[:int(len(perspective_data)*0.1)]:
+                        self.data.extend(qa_entries)
+
         elif args.get("split") == "val":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.9):]:
             #    self.data.extend(qa_entries)
@@ -1163,6 +1192,10 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data[int(len(complex_data)*0.1):]:
                     self.data.extend(qa_entries)
+
+                if args.get("add_perspective"):
+                    for _,_,_, qa_entries in perspective_data[int(len(perspective_data)*0.1):]:
+                        self.data.extend(qa_entries)
         
         if args.get("split") != "val":
             random.shuffle(self.data)
@@ -1179,6 +1212,12 @@ class ProcTHOR_reasoning(Dataset):
             if random.random() < 0.7:
                 question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
 
+        corrected_answer_choices = []
+        for answer in answer_choices:
+            if "in the first frame" in answer: # a small bug, todo fix in data gemeration later.
+                answer = answer.replace("in the first frame", "")
+            corrected_answer_choices.append(answer)
+        answer_choices = corrected_answer_choices
 
         # judge the question type
         question_type = get_qa_type(question)
@@ -2633,7 +2672,7 @@ class CVBench(Dataset):
                 "answers": answers,
             }
         else:
-            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
             return_dict = {
                 "input_ids": input_ids,

@@ -64,8 +64,9 @@ class ArkitScenes(Dataset):
 
         self.data = []
         for image_file in omnidata:
-            pdb.set_trace()
+            # pdb.set_trace()
             for object_name, center_3d, bbox_2d, cam_k in omnidata[image_file]:
+                center_3d = (np.array(center_3d)*100).astype(int)
                 self.data.append((image_file, object_name, center_3d, bbox_2d, cam_k))
 
         self.data = self.data[:3000]
@@ -80,6 +81,12 @@ class ArkitScenes(Dataset):
         cx = cam_k[0][2]
         cy = cam_k[1][2]
 
+        fx = round(fx, 2)
+        fy = round(fy, 2)
+        cx = round(cx, 2)
+        cy = round(cy, 2)
+
+
         img = Image.open(image_file)
 
         prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
@@ -87,12 +94,14 @@ class ArkitScenes(Dataset):
         prefix += "Assume camera is at origin. Camera looks at positive Z, X points to right and Y points upwards. "
 
         cam_instrinsic_prompt = f"Camera intrinsic parameters are: focal length x: {fx}, focal length y: {fy}, center point x: {cx}, center point y: {cy}. The image resolution is: {img.size[0]} x {img.size[1]}."
-        prompt = f"{prompt} {cam_instrinsic_prompt} "
+        
+        question = f"What is the rough 3D location of {object_name}?"
+        answer = str(list(center_3d)).replace("[", "(").replace("]", ")")
 
-        prompt = f"{prompt} {question} ###Assistant: \n"
+        prompt = f"{prefix} {cam_instrinsic_prompt} {question} ###Assistant: \n"
         text_label = prompt + answer + " \n###"
 
-        return [im_file_path,], [img,], prompt, text_label, answer, [answer,], f"procthor_3dcapqa"
+        return [image_file,], [img,], prompt, text_label, answer, [answer,], f"arkit_3dqa"
 
     def __len__(self):
         return len(self.data)

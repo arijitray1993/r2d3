@@ -2392,3 +2392,58 @@ class ReconQAAcc:
 
         self.logger.log({"reconqa_obj_class_acc": obj_class_acc})
         self.logger.log({"reconqa_obj_loc_acc": obj_loc_acc})
+
+class PreciseAcc:
+    def __init__(self, args):
+        self.outputs = []
+        self.obj_loc_accs = []
+        self.logger = args['logger']
+        self.obj_locs_distance = []
+    
+    def update(self, output, gt):
+        
+        gt_question = gt['prompts'][0]
+        gt_answers = gt['answers'][0]
+        pred_answers = output[0]
+
+        format_answer = pred_answers.strip().lower()
+        gt_answer = gt_answers.lower().strip()
+
+        format_answer = format_answer.replace('"', '')
+        format_answer = format_answer.replace("'", "")
+        format_answer = format_answer.replace("(", "[")
+        format_answer = format_answer.replace(")", "]")
+        if "[" not in format_answer:
+            format_answer = "["+format_answer
+        if "]" not in format_answer:
+            format_answer = format_answer + "]"
+        
+        # if multiple such patterns, just take the first one 
+        format_answer = "["+format_answer.split("[")[1].split("]")[0].strip()+"]"
+        correct = False
+
+        try:
+            format_answer = ast.literal_eval(format_answer)
+            gt_answer = ast.literal_eval(gt_answer)
+            distance = np.linalg.norm(np.array(gt_answer) - np.array(format_answer))
+            if distance < 100:
+                correct = True
+            self.obj_locs_distance.append(distance)
+        except:
+            correct = False
+        
+        print("GT: ", gt_answer)
+        print("Pred: ", format_answer)
+        print("Distance: ", distance)
+        print("Correct: ", correct)
+
+        self.obj_loc_accs.append(correct)
+        
+    def compute(self):
+        
+        # overall acc
+        obj_loc_acc = np.mean(self.obj_loc_accs)
+        obj_loc_dist = np.mean(self.obj_locs_distance)
+
+        self.logger.log({"reconqa_obj_loc_acc": obj_loc_acc})
+        self.logger.log({"reconqa_obj_loc_dist": obj_loc_dist})
