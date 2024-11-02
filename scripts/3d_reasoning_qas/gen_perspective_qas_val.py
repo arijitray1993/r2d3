@@ -113,8 +113,8 @@ def get_current_state(controller):
 if __name__ == "__main__":
     
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
-    qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/perspective/'
-    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas.json'
+    qa_im_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/perspective_val/'
+    qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas_val.json'
     vis = True
     stats = False
     generate = True
@@ -140,7 +140,7 @@ if __name__ == "__main__":
         
         # all_im_qas = json.load(open(qa_json_path, "r"))
 
-        for house_ind, house in enumerate(tqdm.tqdm(dataset["train"])):
+        for house_ind, house in enumerate(tqdm.tqdm(dataset["val"])):
             
             house_json = house
 

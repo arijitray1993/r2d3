@@ -259,6 +259,7 @@ if __name__ == "__main__":
                         if state1.metadata["lastActionSuccess"]:
                             simple_actions.append(f"rotated {text_direction}")
                             simple_wrong_actions.append(f"rotated {wrong_text_direction}")
+                            step_i += 1
                         else:
                             fail_i += 1
                             continue
@@ -273,11 +274,12 @@ if __name__ == "__main__":
                             if state2.metadata["lastActionSuccess"]:
                                 simple_actions.append(f"moved forward")
                                 simple_wrong_actions.append(random.choice(["moved forward", f"rotated {wrong_text_direction}"]))
+                                step_i += 1
                             else:
                                 fail_i += 1
                                 continue
 
-                        step_i += 1
+                        
                     if random.random()<0.3:
                         simple_wrong_actions = ["did not move"]
                 else:

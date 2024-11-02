@@ -115,7 +115,7 @@ if __name__ == "__main__":
     split = "train"
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
     qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation_{split}_v2/'
-    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_v2_split2.json'
+    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_split3.json'
     vis = True
     stats = False
     generate = True
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
             
-            if house_ind<5000:
+            if house_ind<8000:
                 continue
             house_json = house
 
@@ -259,6 +259,7 @@ if __name__ == "__main__":
                         if state1.metadata["lastActionSuccess"]:
                             simple_actions.append(f"rotated {text_direction}")
                             simple_wrong_actions.append(f"rotated {wrong_text_direction}")
+                            step_i += 1
                         else:
                             fail_i += 1
                             continue
@@ -273,11 +274,12 @@ if __name__ == "__main__":
                             if state2.metadata["lastActionSuccess"]:
                                 simple_actions.append(f"moved forward")
                                 simple_wrong_actions.append(random.choice(["moved forward", f"rotated {wrong_text_direction}"]))
+                                step_i += 1
                             else:
                                 fail_i += 1
                                 continue
 
-                        step_i += 1
+                        
                     if random.random()<0.3:
                         simple_wrong_actions = ["did not move"]
                 else:
@@ -335,7 +337,10 @@ if __name__ == "__main__":
                             continue
 
                         # check if object actually moved
-                        moved_obj_pos = controller.last_event.metadata['objects'][obj_to_move]['position']
+                        for new_obj in controller.last_event.metadata['objects']:
+                            if new_obj['objectId'] == obj_to_move:
+                                moved_obj_pos = new_obj['position']
+                                break
                         if np.linalg.norm(np.array([moved_obj_pos['x'], moved_obj_pos['z']]) - np.array([new_pos[0], new_pos[2]])) > 0.1:
                             continue
 

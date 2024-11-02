@@ -144,8 +144,7 @@ if __name__ == "__main__":
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
             
-            if house_ind>5000:
-                break
+            
             house_json = house
 
             try:
@@ -259,6 +258,7 @@ if __name__ == "__main__":
                         if state1.metadata["lastActionSuccess"]:
                             simple_actions.append(f"rotated {text_direction}")
                             simple_wrong_actions.append(f"rotated {wrong_text_direction}")
+                            step_i += 1
                         else:
                             fail_i += 1
                             continue
@@ -273,11 +273,12 @@ if __name__ == "__main__":
                             if state2.metadata["lastActionSuccess"]:
                                 simple_actions.append(f"moved forward")
                                 simple_wrong_actions.append(random.choice(["moved forward", f"rotated {wrong_text_direction}"]))
+                                step_i += 1
                             else:
                                 fail_i += 1
                                 continue
 
-                        step_i += 1
+                        
                     if random.random()<0.3:
                         simple_wrong_actions = ["did not move"]
                 else:
@@ -335,7 +336,10 @@ if __name__ == "__main__":
                             continue
 
                         # check if object actually moved
-                        moved_obj_pos = controller.last_event.metadata['objects'][obj_to_move]['position']
+                        for new_obj in controller.last_event.metadata['objects']:
+                            if new_obj['objectId'] == obj_to_move:
+                                moved_obj_pos = new_obj['position']
+                                break
                         if np.linalg.norm(np.array([moved_obj_pos['x'], moved_obj_pos['z']]) - np.array([new_pos[0], new_pos[2]])) > 0.1:
                             continue
 
@@ -528,7 +532,7 @@ if __name__ == "__main__":
         # view in html
         html_str = f"<html><head></head><body>"
         public_im_folder = "/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/"
-        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 20):
+        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 15):
             if not os.path.exists(public_im_folder + f"{house_ind}"):
                 os.makedirs(public_im_folder + f"{house_ind}")
                 
