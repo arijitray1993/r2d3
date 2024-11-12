@@ -9,7 +9,7 @@ batch_size: 1
 lr: 0.000004
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
@@ -17,10 +17,10 @@ lora_rank: 256
 lora_alpha: 512
 # num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_VSR25/polar-cosmos-7_80000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_VSR25/clean-deluge-12_120000 
 
 eval_every: 5000
-num_eval_steps: 20
+num_eval_steps: 4000
 
 no_shuffle: False
 
@@ -50,11 +50,14 @@ valtrain_dataset_args: {
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "AllMLMBench"
+val_dataset_choice: "ProcTHOR_reasoning"
 val_dataset_args: {
   split: "val",
   mode: "val",
-  num_data_points: 5000,
+  prompt_mode: "text_choice",
+  complex_only: True,
+  add_complex: True, 
+  add_perspective: True
 }
 val_collate_fn: "collate_fn" 
 
@@ -74,5 +77,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['QAAccuracy', 'QAAccuracy', [], []],
+  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
 ]

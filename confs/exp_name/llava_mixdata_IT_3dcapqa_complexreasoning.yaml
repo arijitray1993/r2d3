@@ -9,7 +9,7 @@ batch_size: 1
 lr: 0.000003
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: True # if this is set to True, only the val dataset will be run.
+eval_only: False # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
@@ -17,10 +17,10 @@ lora_rank: 256
 lora_alpha: 512
 num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/ancient-oath-2_230000
+lora_model_path: False #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/gallant-wind-11_200000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/faded-spider-7_215000
 
-eval_every: 5000
-num_eval_steps: 3000
+eval_every: 10000
+num_eval_steps: 20
 
 no_shuffle: False
 
@@ -35,11 +35,14 @@ train_dataset_args: {
   prompt_mode: "text_choice",
   add_complex: True,
   mix_datas: {
-    'llavaIT': 0.3,
-    'thor_reasoning': 0.35,
-    'thor_3dcapqa': 0.35
+    'llavaIT': 0.35,
+    'thor_reasoning': 0.45,
+    'thor_3dcapqa': 0.2
   },
   use_cam_intrinsic: True,
+  add_perspective: True,
+  num_perspective: 500,
+  num_complex: 6900
 }
 train_collate_fn: "collate_fn"
 
@@ -58,8 +61,9 @@ val_dataset_args: {
   split: "val",
   mode: "val",
   prompt_mode: "text_choice",
+  complex_only: True,
   add_complex: True,
-  complex_only: True
+  add_perspective: True
 }
 val_collate_fn: "collate_fn" 
 
@@ -79,5 +83,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
+#  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
 ]

@@ -17,7 +17,7 @@ lora_rank: 256
 lora_alpha: 512
 num_warmup_steps: 1000
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning_moretrain/super-dew-1_55000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/ancient-oath-2_230000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/gallant-wind-11_200000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning_moretrain/super-dew-1_55000 
 
 eval_every: 5000
 num_eval_steps: 10000

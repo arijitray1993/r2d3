@@ -66,19 +66,34 @@ def get_caption(image_path, prompt, api_key):
 if __name__=="__main__":
 
     # Load the dataset
-    args = {
-        'split': "val",
-        'mode': "val",
-        'prompt_mode': 'text_choice'
-    }
+    
+    args= {
+        "split": "val",
+        "mode": "val",
+        "prompt_mode": "text_choice",
+        "complex_only": True,
+        "add_complex": True, 
+        "add_perspective": True
+    } 
 
     dataset = ProcTHOR_reasoning(args, tokenizer=None, image_processor=None)
 
-    all_responses = []
+    all_responses = json.load(open("GPT4_complexreasoning_response.json", "r"))
     for ind, entry in enumerate(tqdm.tqdm(dataset)):
+        if ind < len(all_responses):
+            continue
         image_paths, images, prompt, text_label, correct_answer, answer_choices, datatype = entry
         
-        image_path =  image_paths[0]
+        if len(image_paths)==1:
+            image_path =  image_paths[0]
+        else:
+          # join the images into one
+          image1 = cv2.imread(image_paths[0])
+          image2 = cv2.imread(image_paths[1])
+          image = cv2.hconcat([image1, image2])
+          cv2.imwrite("temp.jpg", image)
+          image_path = "temp.jpg"
+          
 
         prompt = prompt.split("Human: Answer in natural language.")[-1].split("###Assistant")[0]
 
@@ -86,8 +101,13 @@ if __name__=="__main__":
 
         response = get_caption(image_path, prompt, api_key)
 
-        response_text = response.json()['choices'][0]['message']['content']
-        # print(response_text)
+        try:
+          response_text = response.json()['choices'][0]['message']['content']
+        except:
+          response_text = "No response"
+          
+        if ind % 20 == 0:
+          print(prompt, response_text)
         # Save the response
         all_responses.append({
           "prompt": prompt,
@@ -101,9 +121,10 @@ if __name__=="__main__":
         # pdb.set_trace()
 
         # Save the responses
-        with open("GPT4_procthorreasoning_response_updated.json", "w") as f:
-            json.dump(all_responses, f)
+        if ind % 100 == 0:
+          with open("GPT4_complexreasoning_response.json", "w") as f:
+              json.dump(all_responses, f)
 
-        if ind>=2000:
+        if ind>=4000:
             break
       

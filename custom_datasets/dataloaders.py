@@ -618,6 +618,12 @@ class CustomMix(Dataset):
             self.all_mix.append(self.vsr_vrd25d)
             self.weights.append(mix_datas["VSR_VRD25D"])
             self.all_lens.append(len(self.vsr_vrd25d))
+
+        if 'spoc_easyobjnav' in mix_datas:
+            self.spoc_easyobjnav = SPOC_data(args, tokenizer, image_processor)
+            self.all_mix.append(self.spoc_easyobjnav)
+            self.weights.append(mix_datas["spoc_easyobjnav"])
+            self.all_lens.append(len(self.spoc_easyobjnav))
         
         print("combined data ...")
 
@@ -1068,8 +1074,6 @@ class LLaVAInstructTune(Dataset):
 
 def get_qa_type(question):
     question_type = "other"
-    if "how many" in question.lower():
-        question_type = "count"
     
     if "how did the camera" in question.lower() or "is the camera moving" in question.lower():
         question_type = "action_sequence"
@@ -1083,16 +1087,12 @@ def get_qa_type(question):
     if "if i" in question.lower():
         question_type = "action_consequence"
 
-    if "is closer" in question.lower():
-        question_type = "obj_depth"
-    
-    if "considering the relative positions" in question.lower():
-        question_type = "sp_rel"
+    if 'if i move to the' in question.lower() or "for someone at the" in question.lower():
+        question_type = "perspective"
 
-    if 'estimate the real world distances' in question.lower():
-        question_type = "relative_distance"
     
     return question_type
+
 
 
 class ProcTHOR_reasoning(Dataset):
@@ -1117,13 +1117,12 @@ class ProcTHOR_reasoning(Dataset):
         if args.get("add_complex"):
             print("Adding complex data")
             if args.get("split") == "train":
-                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train.json'
-                complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split2.json'
-                complex_qa_json_path_split3 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_split3.json'
-                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2)) + json.load(open(complex_qa_json_path_split3))
-                   
+                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_v2.json' # remove v2 for prev version.
+                complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_v2_split2.json'
+                complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))
+                complex_data = random.sample(complex_data, args.get("num_complex", 4500)) # just to keep proportions similar to other kinds of spatial data
             else:
-                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val.json'
+                complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val_v2.json'
                 complex_data = json.load(open(complex_qa_json_path))
             
             print("Length of complex data: ", len(complex_data))
@@ -1133,6 +1132,7 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("split") == "train":
                 perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas.json'
                 perspective_data = json.load(open(perspective_qa_json_path))
+                perspective_data = random.sample(perspective_data, args.get("num_perspective", 4500)) # just to keep proportions similar to other kinds of spatial data
             else:
                 perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas_val.json'
                 perspective_data = json.load(open(perspective_qa_json_path))
@@ -1155,6 +1155,11 @@ class ProcTHOR_reasoning(Dataset):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data:
                     for question, im_order, answers in qa_entries:
                         question = question.replace("turn look straight", "look straight")
+
+                        if answers[0] == "rotated left and rotated right" or answers[0] == "rotated right and rotated left": # bug fix
+                            new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
+                            answers = new_answers
+                        
                         self.data.append((question, im_order, answers))
                 
                 if args.get("add_perspective"):
@@ -1176,26 +1181,61 @@ class ProcTHOR_reasoning(Dataset):
 
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data[:int(len(complex_data)*0.1)]:
-                    self.data.extend(qa_entries)
+                    for question, im_order, answers in qa_entries:
+                        question = question.replace("turn look straight", "look straight")
+
+                        if answers[0] == "rotated left and rotated right" or answers[0] == "rotated right and rotated left": # bug fix
+                            new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
+                            answers = new_answers
+
+                        self.data.append((question, im_order, answers))
                 
                 if args.get("add_perspective"):
                     for _,_,_, qa_entries in perspective_data[:int(len(perspective_data)*0.1)]:
-                        self.data.extend(qa_entries)
+                        for question, im_order, answers in qa_entries:
+                            question = question.replace("turned towards the", "facing 90 degrees to the")
+                            question = question.replace("turned right", "turned right by 90 degrees")
+                            question = question.replace("turned left", "turned left by 90 degrees")
+
+                            self.data.append((question, im_order, answers))
 
         elif args.get("split") == "val":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.9):]:
             #    self.data.extend(qa_entries)
+            num_basic=0
+            num_complex=0
+            num_perspective=0
             if not args.get("complex_only"):
                 for house_ind, cam_pos, cam_rot, qa_entries in spatial_data[int(len(spatial_data)*0.1):]:
                     self.data.extend(qa_entries)
+                    num_basic += len(qa_entries)
             
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data[int(len(complex_data)*0.1):]:
-                    self.data.extend(qa_entries)
+                    for question, im_order, answers in qa_entries:
+                        question = question.replace("turn look straight", "look straight")
+
+                        if answers[0] == "rotated left and rotated right" or answers[0] == "rotated right and rotated left": # bug fix
+                            new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
+                            answers = new_answers
+                        
+                        self.data.append((question, im_order, answers))
+                        num_complex += 1
 
                 if args.get("add_perspective"):
                     for _,_,_, qa_entries in perspective_data[int(len(perspective_data)*0.1):]:
-                        self.data.extend(qa_entries)
+                        for question, im_order, answers in qa_entries:
+                            question = question.replace("turned towards the", "facing 90 degrees to the")
+                            question = question.replace("turned right", "turned right by 90 degrees")
+                            question = question.replace("turned left", "turned left by 90 degrees")
+
+                            self.data.append((question, im_order, answers))
+                            num_perspective += 1
+                            if num_perspective > 1000:
+                                break
+                        if num_perspective > 1000:
+                            break
+            print("Basic: ", num_basic, " Complex: ", num_complex, " Perspective: ", num_perspective)
         
         if args.get("split") != "val":
             random.shuffle(self.data)
@@ -1210,7 +1250,8 @@ class ProcTHOR_reasoning(Dataset):
         # rephrase a question sometimes (this is hacky, need to add this rephrases to actual data later)
         if "How did the camera likely move" in question:
             if random.random() < 0.7:
-                question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
+                # question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
+                question = "The images are frames from a video. The video is shooting a static scene. The camera is either moving clockwise (left) or counter-clockwise (right) around the object. The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
 
         corrected_answer_choices = []
         for answer in answer_choices:
@@ -2721,12 +2762,19 @@ class BLINK(Dataset):
         entry, subtask = self.data[idx]
         question = entry['prompt'].split("?")[0]+"?"
         
-
+        
+        # question = question.replace("The images are frames from a video. The video is shooting a static scene. The camera is either moving clockwise (left) or counter-clockwise (right) around the object.", "")
+        
         answer = entry['answer']
         answer = answer.replace("(", "").replace(")", "")
         answer = entry['choices'][self.choice_to_number[answer]]
 
-        choice_format = ", ".join(entry['choices'][:-1]) + ", or "+entry['choices'][-1]
+        if "The video is shooting a static scene. The camera is either moving clockwise" in question:
+            answer_choices = ["rotated "+x for x in entry['choices']]
+            answer = "rotated "+answer
+            choice_format = ", ".join(answer_choices[:-1]) + ", or "+answer_choices[-1]
+        else:    
+            choice_format = ", ".join(entry['choices'][:-1]) + ", or "+entry['choices'][-1]
 
         images = []
         image_1 = entry['image_1']
@@ -2774,7 +2822,7 @@ class BLINK(Dataset):
         return len(self.data)
 
     def collate_fn(self, batch):
-        images, prompts, text_labels, answers, subtasks = zip(*batch)
+        images, prompts, text_labels, answers, datanames = zip(*batch)
 
         if self.args.get("llava_ov"):
             pixel_values, input_ids, attention_mask, image_sizes =  get_inputs_for_model(images, prompts, None, self.image_processor, model_choice="llava_ov")
@@ -2790,7 +2838,7 @@ class BLINK(Dataset):
                 "answers": answers,
             }
         else:
-            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+            pixel_values, input_ids, attention_mask =  get_inputs_for_model(images, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
             return_dict = {
                 "input_ids": input_ids,
@@ -2802,7 +2850,7 @@ class BLINK(Dataset):
                 "dataset": datanames,
                 "answers": answers,
             }
-        # pdb.set_trace()
+
         return return_dict
 
 
@@ -2818,8 +2866,8 @@ class AllMLMBench(Dataset):
             self.batch_decode = self.image_processor.batch_decode
 
         self.all_data = [
-            CVBench(args, tokenizer, image_processor),
             BLINK(args, tokenizer, image_processor),
+            CVBench(args, tokenizer, image_processor),
         ]
 
     def __getitem__(self, idx):

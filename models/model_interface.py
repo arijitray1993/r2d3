@@ -499,6 +499,64 @@ class LlavaModel_13B_Interface(nn.Module):
         # pdb.set_trace()
         
         return outputs
+    
+class Robopoint_13B_Interface(nn.Module):
+
+    def __init__(self, args):
+        
+        super().__init__()
+        model_path = "wentao-yuan/robopoint-v1-vicuna-v1.5-13b"
+
+        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+            model_path=model_path,
+            model_base=None,
+            model_name=get_model_name_from_path(model_path),
+            # load_8bit=True
+        )
+
+        self.temperature = args['temperature']
+        self.top_p = args['top_p']
+        self.num_beams = args['num_beams']
+        self.max_new_tokens = args['max_new_tokens']
+
+        self.keywords = ["###", " \n###"]
+
+    def generate(self, input_ids, pixel_values=None, attention_mask=None, labels=None):
+        stopping_criteria = KeywordsStoppingCriteria(self.keywords, self.tokenizer, input_ids)
+        #pdb.set_trace()
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+        
+        output_ids = self.model.generate(
+            input_ids,
+            images=pixel_values,
+            do_sample=True if self.temperature > 0 else False,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            num_beams=self.num_beams,
+            max_new_tokens=self.max_new_tokens,
+            use_cache=True,
+            stopping_criteria=[stopping_criteria]
+        )
+
+        # pdb.set_trace()
+
+        return output_ids
+
+    def forward(self, input_ids, pixel_values=None, attention_mask=None, labels=None,):
+        if pixel_values is not None:
+            pixel_values.to(self.model.dtype)
+
+        outputs =  self.model(
+            input_ids,
+            images=pixel_values,
+            output_hidden_states=True,
+            return_dict=True,
+            labels=labels,
+            attention_mask=attention_mask)
+        # pdb.set_trace()
+        
+        return outputs
 
 class LlavaNext_13B_Interface(nn.Module):
 
@@ -551,6 +609,8 @@ class LlavaNext_13B_Interface(nn.Module):
         # pdb.set_trace()
         
         return outputs
+
+
 
 
 class LLaVA_OV_Interface(nn.Module):

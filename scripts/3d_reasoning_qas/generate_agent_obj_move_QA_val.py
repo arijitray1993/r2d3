@@ -119,7 +119,7 @@ if __name__ == "__main__":
     vis = True
     stats = False
     generate = True
-    load_progress = False
+    load_progress = True
 
     if generate:
         if not os.path.exists(qa_im_path):
@@ -144,11 +144,13 @@ if __name__ == "__main__":
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
             
+            if house_ind<800:
+                continue
             
             house_json = house
 
             try:
-                controller = Controller(scene=house, width=300, height=300, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
+                controller = Controller(scene=house, width=200, height=200, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
             except:
                 print("Cannot render environment, continuing")
                 # pdb.set_trace()
@@ -522,9 +524,10 @@ if __name__ == "__main__":
                 sample_count += 1
                 controller.stop()
             
-            if house_ind % 100 == 0:
+            if len(all_im_qas) % 100 == 0:
                 json.dump(all_im_qas, open(qa_json_path, "w"))
 
+        json.dump(all_im_qas, open(qa_json_path, "w"))
             
     if vis:
         all_im_qas = json.load(open(qa_json_path, "r"))

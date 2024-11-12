@@ -1,6 +1,6 @@
-exp_name: llava_mixdata_IT_3dcapqa_complexreasoning_moretrain
+exp_name: llava_mixdata_IT_3dcapqa_complexreasoning_arkittest
 device: 'gpu'
-num_workers: 4
+num_workers: 0
 
 
 ### loading checkpoints, eval, train options
@@ -9,7 +9,7 @@ batch_size: 1
 lr: 0.000003
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
@@ -20,7 +20,7 @@ num_warmup_steps: 1000
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning/ancient-oath-2_230000
 
 eval_every: 5000
-num_eval_steps: 30
+num_eval_steps: 3000
 
 no_shuffle: False
 
@@ -31,7 +31,7 @@ train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
-  num_data_points: 400000,
+  num_data_points: 200000,
   prompt_mode: "text_choice",
   add_complex: True,
   mix_datas: {
@@ -53,13 +53,12 @@ valtrain_dataset_args: {
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "ProcTHOR_reasoning"
+val_dataset_choice: "ArkitScenes"
 val_dataset_args: {
   split: "val",
   mode: "val",
   prompt_mode: "text_choice",
-  add_complex: True,
-  complex_only: True
+  use_cam_intrinsic: True
 }
 val_collate_fn: "collate_fn" 
 
@@ -79,5 +78,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-#  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
+  ['PreciseAcc', 'PreciseAcc', [], []],
 ]

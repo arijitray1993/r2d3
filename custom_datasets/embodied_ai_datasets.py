@@ -75,9 +75,13 @@ def read_video_frames(video_path):
 
 def make_desc_for_task(task_name, task_templ):
     if task_name == "ObjectNavAffordance":
-        task_desc = f"I need to go to the {task_templ['synsets'][0].split('.')[0]} that is best used to {task_templ['affordance'].lower().strip()} What should be my next action?"
+        task_desc = f"I need to go to the {task_templ['synsets'][0].split('.')[0]} that is best used to {task_templ['affordance'].lower().strip()} Which direction should I turn to face the object? Make sure to not run into obstacles."
     elif task_name == "PickupType":
-        task_desc = f"I need to pickup {task_templ['synsets'][0].split('.')[0]}. What should be my next action?"
+        task_desc = f"I need to pickup {task_templ['synsets'][0].split('.')[0]}. Which direction should I turn to face the object?"
+    elif task_name == "EasyObjectNavType":
+        obj_name = task_templ['synsets'][0].split('.')[0]
+        obj_name = obj_name.replace("_", " ")
+        task_desc = f"I need to go to the {obj_name}. Which direction should I turn to face the object?" # Make sure to not run into obstacles."
 
     return task_desc
 
@@ -95,20 +99,27 @@ class SPOC_data(Dataset):
             self.table = wandb.Table(columns=["Prompt", "Action Answer", "Image"])
             self.logger = wandb.init(project="spoc_debug", config=args)
         
-        data_path = "/projectnb/ivc-ml/array/research/robotics/spoc-robot-training/manip_data/fifteen/"
+        data_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/SPOC_data"
 
         tasks = os.listdir(data_path)
         action_map = {
-            'm': "move forward",
-            'l': "turn left",
-            'r': "turn right",
-            'ls': "slight left",
-            'rs': "slight right",
+            'm': "go straight",
+            'l': "left",
+            'r': "right",
+            'ls': "left",
+            'rs': "right",
             'b': "move backward",
             'end': "no action, goal achieved",
         }
-        selected_tasks = ["ObjectNavAffordance"]#, "PickupType"] # "ObjectNavDescription",]
-
+        action_map = {
+            'move_ahead': "straight",
+            'rotate_left': "left",
+            'rotate_right': "right",
+            'rotate_left_small': "left",
+            'rotate_right_small': "right",
+        }
+        selected_tasks = ["EasyObjectNavType"]#, "PickupType"] # "ObjectNavDescription",]
+        self.action_choices = list(action_map.values())
         self.all_data = []
         split = args['split']
         if args['split'] == "valtrain":
@@ -145,21 +156,33 @@ class SPOC_data(Dataset):
                     for action in episode['last_action_success']:
                         last_action_success.append(action[0])
 
-                    object_bbox_cols = np.array(episode['task_relevant_object_bbox']['max_cols'])
+                    #pdb.set_trace()
+                    object_bbox_cols = np.array(episode['nav_task_relevant_object_bbox']['max_cols'])
                     
                     obj_visible = [col[0]!=-1 for col in object_bbox_cols]
 
                     task_templ = ast.literal_eval(convert_byte_to_string(episode['templated_task_spec'][0]))
-                    # pdb.set_trace()
                     task_desc = make_desc_for_task(task, task_templ)
-
+                    # pdb.set_trace()
+                    
                     for index, (action, rand_action, last_action_succ, obj_vis) in enumerate(zip(actions_taken, random_action, last_action_success, obj_visible)):
                         if obj_vis:
                             if (not rand_action) and last_action_succ and index > 0:
-                                action_word = action_map[action]
-                                if action_word == "move forward":
-                                    if random.random() > 0.7:
+                                if action in action_map:
+                                    action_word = action_map[action]
+                                else:
+                                    action_word = action.replace("_", " ")
+                                # pdb.set_trace()
+                                if action_word == "look straight":
+                                    if random.random() > 0.5:
                                         continue
+                                if self.args['split'] == "val": # just for zero-shot eval.
+                                    if action_word == "done":
+                                        continue
+                                
+                                    if not obj_visible:
+                                        continue
+                                
                                 self.all_data.append({
                                     'frame_index': index-1,
                                     'task': task_desc,
@@ -167,6 +190,8 @@ class SPOC_data(Dataset):
                                     'video_file': video_file,
                                     'action_taken': action_word,
                                 })
+                    
+                    
         if args['split'] == "train":
             self.all_data = self.all_data[:int(0.8*len(self.all_data))]
         elif args['split'] == "valtrain":
@@ -183,11 +208,16 @@ class SPOC_data(Dataset):
         video_frames = read_video_frames(entry['video_file'])
 
         frame_index = entry['frame_index']
-        frame = video_frames[frame_index]
+        try:
+            frame = video_frames[frame_index]
+        except:
+            video_frames = read_video_frames(entry['video_file'])
+            frame = video_frames[frame_index]
         frame = Image.fromarray(frame)
         # pdb.set_trace()
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
         
-        prompt = f"###Human: <im_start><image><im_end> \nHuman: Answer in action space. {entry['task']} What should be my next action? ###Assistant: \n"
+        prompt = f'{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {entry["task"]} Answer the question using a single word or phrase. Choose between the following options: "left", "right", or "straight". ###Assistant: \n'
         action = entry['action_taken']
         text_label = prompt + action + " \n###"
 
@@ -198,13 +228,13 @@ class SPOC_data(Dataset):
             self.table.add_data(prompt, action, wandb.Image(frame))
             self.logger.log({"spoc_examples": self.table})
 
-        return [frame,], prompt, text_label, action, "SPOC"
+        return ["",], [frame,], prompt, text_label, action, self.action_choices, "SPOC_easyObjNav"
 
     def __len__(self):
         return len(self.all_data)
 
     def collate_fn(self, batch):
-        images, prompts, text_labels, answers, datanames = zip(*batch)
+        image_paths, images, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
         
         new_images = []
         for image_b in images:

@@ -1,4 +1,4 @@
-exp_name: llava_mixdata_reasoning_complexreason
+exp_name: llava_mixdata_reasoning_VSRtest
 device: 'gpu'
 num_workers: 4
 
@@ -13,8 +13,6 @@ eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
-lora_rank: 256
-lora_alpha: 512
 
 lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning/woven-snow-25_110000
 
@@ -30,8 +28,7 @@ train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
-  num_data_points: 200000,
-  prompt_mode: "text_choice"
+  num_data_points: 100000
 }
 train_collate_fn: "collate_fn"
 
@@ -41,20 +38,17 @@ valtrain_dataset_choice: "ProcTHOR_reasoning"
 valtrain_dataset_args: {
   split: "valtrain",
   mode: "val",
-  prompt_mode: "text_choice"
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
-val_dataset_choice: "ProcTHOR_reasoning"
+val_dataset_choice: "VSR_VRD25D"
 val_dataset_args: {
   split: "val",
   mode: "val",
   prompt_mode: "text_choice",
-  complex_only: True,
-  add_complex: True, 
-  add_perspective: True
 }
 val_collate_fn: "collate_fn" 
+
 
 
 ## define model. The name must match the class name in models/model_interface.py
@@ -72,5 +66,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
+  ['QAAccuracy', 'QAAccuracy', [], []],
 ]

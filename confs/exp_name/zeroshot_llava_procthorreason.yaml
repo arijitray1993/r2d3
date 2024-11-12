@@ -10,7 +10,7 @@ lr: 0.000004
 weight_decay: 0
 lr_scheduler: "cosine"
 eval_only: True # if this is set to True, only the val dataset will be run.
-tune_lora: True
+tune_lora: False
 load_checkpoint: False
 gradient_accumulation_steps: 8
 lora_rank: 256
@@ -19,7 +19,7 @@ lora_alpha: 512
 lora_model_path: False
 
 eval_every: 5000
-num_eval_steps: 3000
+num_eval_steps: 4000
 
 no_shuffle: False
 
@@ -34,7 +34,8 @@ val_dataset_args: {
   mode: "val",
   prompt_mode: "text_choice",
   complex_only: True,
-  add_complex: True
+  add_complex: True, 
+  add_perspective: True
 }
 val_collate_fn: "collate_fn" 
 

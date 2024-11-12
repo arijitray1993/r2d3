@@ -16,7 +16,7 @@ gradient_accumulation_steps: 8
 lora_rank: 256
 lora_alpha: 512
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/young-elevator-25_130000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/lucky-feather-24_15000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/skilled-star-23_200000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning_moretrain/fresh-sun-2_50000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
 
 eval_every: 5000
 num_eval_steps: 10000

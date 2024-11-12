@@ -2204,11 +2204,108 @@ class ReasoningAccuracy:
         data_name = gt['dataset'][0]
         gt_question = gt['prompts']
         gt_answers = gt['answers']
+        # answer_choices = gt['answer_choices'][0]
+        pred_answers = output[0].strip()
+
+        format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
+        gt_answer = gt_answers[0].lower().strip()
+
+        correct = gt_answer in format_answer or format_answer in gt_answer
+
+        #incorrect_answers = [ans for ans in answer_choices if gt_answer not in ans.lower().strip()]
+
+        #for inc_ans in incorrect_answers:
+        #    if inc_ans in format_answer:
+        #        correct = False
+        #        break
+        
+        if "rotated left and rotated right" in gt_answer:
+            if "rotated left and rotated right" in format_answer or "rotated right and rotated left" in format_answer or "did not move" in format_answer:
+                correct = True
+
+        print("GT: ", gt_answer)
+        print("Pred: ", format_answer)
+        print("Correct: ", correct)
+
+        # random_correct = random.choice(answer_choices).lower().strip() == gt_answer
+            
+        self.accs.append(correct)
+        # self.random_accs.append(random_correct)
+
+        self.outputs.append((gt_question, gt_answers, pred_answers, data_name)) #, answer_choices))
+
+        
+    def compute(self):
+        
+        try:
+            with open(os.path.join(self.exp_folder, 'output.json'), 'w') as f:
+                json.dump(self.outputs, f)
+        except:
+            print("Error in saving output json")
+
+        # overall acc
+        acc = np.mean(self.accs)
+        self.logger.log({"overall_acc": acc})
+
+        # random_acc = np.mean(self.random_accs)
+        # self.logger.log({"random_acc": random_acc})
+
+        # acc by data name
+        '''
+        data_accs = {}
+        data_random_acc = {}
+        for out_entry, acc, ran_acc in zip(self.outputs, self.accs, self.random_accs):
+            data_name = out_entry[-1]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+                data_random_acc[data_name] = []
+            data_accs[data_name].append(acc)
+            data_random_acc[data_name].append(ran_acc)
+        '''
+        data_accs = {}
+        for out_entry, acc in zip(self.outputs, self.accs):
+            data_name = out_entry[-1]
+            if data_name not in data_accs:
+                data_accs[data_name] = []
+            data_accs[data_name].append(acc)
+
+        for data_name in data_accs:
+            acc = np.mean(data_accs[data_name])
+            self.logger.log({f"{data_name}_acc": acc})
+
+
+class ReasoningAccuracyVSR:
+    def __init__(self, args):
+        self.outputs = []
+        self.accs = []
+        self.random_accs = []
+        self.logger = args['logger']
+        self.exp_folder = os.path.join("checkpoints", args['exp_name'])
+    
+    def update(self, output, gt):
+        
+        data_name = gt['dataset'][0]
+        gt_question = gt['prompts']
+        gt_answers = gt['answers']
         answer_choices = gt['answer_choices'][0]
         pred_answers = output[0].strip()
 
         format_answer = pred_answers.split("\n")[0].split("###")[-1].strip().lower()
         gt_answer = gt_answers[0].lower().strip()
+        if format_answer == "" or format_answer == "assistant:":
+            if "###Assistant" in pred_answers:
+                try:
+                    format_answer = pred_answers.split("###Assistant:")[1].split("###")[0].strip().lower()
+                except:
+                    format_answer = pred_answers.split("###")[0].strip().lower()
+            else:
+                format_answer = pred_answers.split("###")[0].strip().lower().split(".")[0]
+
+        format_answer = format_answer.replace("(", "")
+        format_answer = format_answer.replace(")", "")
+        gt_answer = gt_answer.replace("(", "")
+        gt_answer = gt_answer.replace(")", "")
+
 
         correct = gt_answer in format_answer or format_answer in gt_answer
 
@@ -2219,6 +2316,7 @@ class ReasoningAccuracy:
                 correct = False
                 break
         
+
         print("GT: ", gt_answer)
         print("Pred: ", format_answer)
         print("Correct: ", correct)
@@ -2238,7 +2336,6 @@ class ReasoningAccuracy:
                 json.dump(self.outputs, f)
         except:
             print("Error in saving output json")
-            pass
 
         # overall acc
         acc = np.mean(self.accs)

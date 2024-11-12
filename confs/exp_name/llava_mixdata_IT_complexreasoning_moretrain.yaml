@@ -1,4 +1,4 @@
-exp_name: llava_mixdata_reasoning_complexreason
+exp_name: llava_mixdata_IT_complexreasoning_moretrain
 device: 'gpu'
 num_workers: 4
 
@@ -6,32 +6,41 @@ num_workers: 4
 ### loading checkpoints, eval, train options
 num_epochs: 50
 batch_size: 1
-lr: 0.000005
+lr: 0.000002
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: True # if this is set to True, only the val dataset will be run.
+eval_only: False # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 lora_rank: 256
 lora_alpha: 512
+num_warmup_steps: 0
 
-lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning/woven-snow-25_110000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-snowflake-19_215000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/ineffable-void-12_90000 # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
 
 eval_every: 5000
-num_eval_steps: 4000
+num_eval_steps: 20
 
 no_shuffle: False
 
 freeze_vision: False
 
-train_dataset_choice: "MixLLaVAProcthorReasoning"
+train_dataset_choice: "CustomMix"
 train_dataset_args: {
   split: "train",
   mode: "train",
   qa_format: True,
   num_data_points: 200000,
-  prompt_mode: "text_choice"
+  prompt_mode: "text_choice",
+  add_complex: True,
+  mix_datas: {
+    'llavaIT': 0.35,
+    'thor_reasoning': 0.65
+  },
+  add_perspective: True,
+  num_perspective: 1000,
+  num_complex: 6000
 }
 train_collate_fn: "collate_fn"
 
@@ -51,7 +60,7 @@ val_dataset_args: {
   mode: "val",
   prompt_mode: "text_choice",
   complex_only: True,
-  add_complex: True, 
+  add_complex: True,
   add_perspective: True
 }
 val_collate_fn: "collate_fn" 
@@ -72,5 +81,5 @@ model_input_choice: ['input_ids', 'attention_mask', 'pixel_values', 'labels']
  
 ## Metrics [name, torchmetric_class_name_in_eval.py, metric init args, metric update args]:
 metrics: [ 
-  ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
+#   ['ReasoningAccuracy', 'ReasoningAccuracy', [], []],
 ]

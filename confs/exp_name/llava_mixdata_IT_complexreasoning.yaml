@@ -6,7 +6,7 @@ num_workers: 4
 ### loading checkpoints, eval, train options
 num_epochs: 50
 batch_size: 1
-lr: 0.000003
+lr: 0.000002
 weight_decay: 0
 lr_scheduler: "cosine"
 eval_only: False # if this is set to True, only the val dataset will be run.
@@ -15,9 +15,9 @@ load_checkpoint: False
 gradient_accumulation_steps: 8
 lora_rank: 256
 lora_alpha: 512
-num_warmup_steps: 2000
+num_warmup_steps: 0
 
-lora_model_path: False # /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/skilled-star-23_100000  #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
 
 eval_every: 5000
 num_eval_steps: 20
@@ -37,7 +37,10 @@ train_dataset_args: {
   mix_datas: {
     'llavaIT': 0.4,
     'thor_reasoning': 0.6
-  }
+  },
+  add_perspective: True,
+  num_perspective: 300,
+  num_complex: 6900
 }
 train_collate_fn: "collate_fn"
 
@@ -47,7 +50,9 @@ valtrain_dataset_choice: "ProcTHOR_reasoning"
 valtrain_dataset_args: {
   split: "valtrain",
   mode: "val",
-  prompt_mode: "text_choice"
+  prompt_mode: "text_choice",
+  complex_only: True,
+  add_complex: True,
 }
 
 ## define your val dataset, the name must match the class name in datasets/dataloaders.py. This is run only when eval_only is set to True
@@ -58,6 +63,7 @@ val_dataset_args: {
   prompt_mode: "text_choice",
   complex_only: True,
   add_complex: True,
+  add_perspective: True
 }
 val_collate_fn: "collate_fn" 
 

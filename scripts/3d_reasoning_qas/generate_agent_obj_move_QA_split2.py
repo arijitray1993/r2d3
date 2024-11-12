@@ -115,10 +115,10 @@ if __name__ == "__main__":
     split = "train"
     asset_id_desc = json.load(open("/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/mturk_clean_assrt_desc/assetid_to_info.json", "r"))
     qa_im_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/multi_qa_images/navigation_{split}_v2/'
-    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_split3.json'
+    qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_v2_split2.json'
     vis = True
     stats = False
-    generate = True
+    generate = False
     load_progress = False
 
     if generate:
@@ -144,12 +144,12 @@ if __name__ == "__main__":
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
             
-            if house_ind<8000:
+            if house_ind<5000:
                 continue
             house_json = house
 
             try:
-                controller = Controller(scene=house, width=300, height=300, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
+                controller = Controller(scene=house, width=200, height=200, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
             except:
                 print("Cannot render environment, continuing")
                 # pdb.set_trace()
@@ -523,9 +523,10 @@ if __name__ == "__main__":
                 sample_count += 1
                 controller.stop()
             
-            if house_ind % 100 == 0:
+            if len(all_im_qas) % 100 == 0:
                 json.dump(all_im_qas, open(qa_json_path, "w"))
 
+        json.dump(all_im_qas, open(qa_json_path, "w"))
             
     if vis:
         all_im_qas = json.load(open(qa_json_path, "r"))

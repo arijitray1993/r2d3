@@ -118,7 +118,7 @@ if __name__ == "__main__":
     qa_json_path = f'/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_{split}_v2.json'
     vis = True
     stats = False
-    generate = True
+    generate = False
     load_progress = False
 
     if generate:
@@ -144,12 +144,12 @@ if __name__ == "__main__":
 
         for house_ind, house in enumerate(tqdm.tqdm(dataset[split])):
             
-            if house_ind>5000:
+            if house_ind>=5000:
                 break
             house_json = house
 
             try:
-                controller = Controller(scene=house, width=300, height=300, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
+                controller = Controller(scene=house, width=200, height=200, quality="Low", platform=CloudRendering) # quality="Ultra", renderInstanceSegmentation=True, visibilityDistance=30)
             except:
                 print("Cannot render environment, continuing")
                 # pdb.set_trace()
@@ -337,7 +337,10 @@ if __name__ == "__main__":
                             continue
 
                         # check if object actually moved
-                        moved_obj_pos = controller.last_event.metadata['objects'][obj_to_move]['position']
+                        for new_obj in controller.last_event.metadata['objects']:
+                            if new_obj['objectId'] == obj_to_move:
+                                moved_obj_pos = new_obj['position']
+                                break
                         if np.linalg.norm(np.array([moved_obj_pos['x'], moved_obj_pos['z']]) - np.array([new_pos[0], new_pos[2]])) > 0.1:
                             continue
 
@@ -513,23 +516,25 @@ if __name__ == "__main__":
                     image_order = [new_path_marked]
                     qa_pair_choices.append((question, image_order, answer_choices))
 
+
                 # pdb.set_trace()
                 if len(qa_pair_choices) > 0:
                     all_im_qas.append((house_ind, cam_pos, cam_rot, qa_pair_choices))
                 sample_count += 1
                 controller.stop()
             
-            if house_ind % 100 == 0:
+            if len(all_im_qas) % 100 == 0:
                 json.dump(all_im_qas, open(qa_json_path, "w"))
 
-            
+        json.dump(all_im_qas, open(qa_json_path, "w"))
+        
     if vis:
         all_im_qas = json.load(open(qa_json_path, "r"))
         print("Num samples: ", len(all_im_qas))
         # view in html
         html_str = f"<html><head></head><body>"
         public_im_folder = "/net/cs-nfs/home/grad2/array/public_html/research/r2d3/multi_qa_ims/navigation/"
-        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 20):
+        for house_ind, _, _, qa_pairs in random.sample(all_im_qas, 100):
             if not os.path.exists(public_im_folder + f"{house_ind}"):
                 os.makedirs(public_im_folder + f"{house_ind}")
                 

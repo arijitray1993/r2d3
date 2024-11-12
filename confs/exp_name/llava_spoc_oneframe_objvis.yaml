@@ -4,31 +4,39 @@ num_workers: 4
 
 
 ### loading checkpoints, eval, train options
-num_epochs: 50
-batch_size: 2
+num_epochs: 20
+batch_size: 1
 lr: 0.000005
 weight_decay: 0
 lr_scheduler: "cosine"
-eval_only: False # if this is set to True, only the val dataset will be run.
+eval_only: True # if this is set to True, only the val dataset will be run.
 tune_lora: True
 load_checkpoint: False
 gradient_accumulation_steps: 8
 lora_rank: 256
 lora_alpha: 512
 
-lora_model_path: False
+lora_model_path: /projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-snowflake-19_215000 #/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning/colorful-forest-2_215000
 
-eval_every: 5000
-num_eval_steps: 100
+eval_every: 1000
+num_eval_steps: 4000
 
 no_shuffle: False
 
 freeze_vision: False
 
-train_dataset_choice: "SPOC_data"
+train_dataset_choice: "CustomMix"
 train_dataset_args: {
   split: "train",
   mode: "train",
+  qa_format: True,
+  num_data_points: 200000,
+  prompt_mode: "text_choice",
+  add_complex: True,
+  mix_datas: {
+    'spoc_easyobjnav': 1
+  },
+  add_perspective: True,
   debug_mode: False
 }
 train_collate_fn: "collate_fn"
