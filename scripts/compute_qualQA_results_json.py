@@ -25,12 +25,13 @@ from collections import defaultdict
 if __name__=="__main__":
     
     #json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses_randomobjpoint_updated.json"
-    json_file1 = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/zeroshot_llava_MLMBench/output.json"
-    json_file2 = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_3dcapqa_complexreasoning_MLMBench/output.json"
+    # json_file1 = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/zeroshot_llava_MLMBench/output.json"
+    json_file1 = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_MLMBench/output.json"
+    json_file2 = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_complexreasoning_MLMBench/output.json"
 
     log = True
     if log:
-        exp_name = "compare_"+json_file1.split('/')[-2]+"_"+json_file2.split('/')[-2]
+        exp_name = "compare_bothwrong"+json_file1.split('/')[-2]+"_"+json_file2.split('/')[-2]
         wandb.login()
         run = wandb.init(project=exp_name)
         logger = run
@@ -90,7 +91,7 @@ if __name__=="__main__":
         #    count += 1
         #    all_correct[dataname].append(correct1)
 
-        if correct2 and not correct1:
+        if not correct2 and not correct1:
             if log:   
                 if "MLMBench" in json_file1:
                     if len(images) == 1:

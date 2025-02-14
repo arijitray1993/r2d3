@@ -193,6 +193,7 @@ if __name__=="__main__":
     plt.figure(figsize=(30, 30))
     plt.bar(obj_classes, obj_counts)
     plt.xticks(rotation=90, fontsize=7)
+    plt.set_yscale('log')
     plt.savefig("object_class_histogram.pdf")
 
 

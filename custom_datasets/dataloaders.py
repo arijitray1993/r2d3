@@ -7,6 +7,7 @@ import itertools
 from itertools import combinations
 import functools
 import pickle as pkl
+import requests
  
 import torch
 import tqdm  # noqa
@@ -37,20 +38,24 @@ import sys
 sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
 # sys.path.append("models/LLaVA_modified/LLaVA")
 #NOLINT
-from llava.mm_utils import (
-    process_images,
-    tokenizer_image_token,
-    get_model_name_from_path,
-    KeywordsStoppingCriteria,
-)
-from llava.mm_utils import expand2square
-from llava.constants import (
-    IMAGE_TOKEN_INDEX,
-    DEFAULT_IMAGE_TOKEN,
-    DEFAULT_IM_START_TOKEN,
-    DEFAULT_IM_END_TOKEN,
-    IMAGE_PLACEHOLDER,
-)
+
+try:
+    from llava.mm_utils import (
+        process_images,
+        tokenizer_image_token,
+        get_model_name_from_path,
+        KeywordsStoppingCriteria,
+    )
+    from llava.mm_utils import expand2square
+    from llava.constants import (
+        IMAGE_TOKEN_INDEX,
+        DEFAULT_IMAGE_TOKEN,
+        DEFAULT_IM_START_TOKEN,
+        DEFAULT_IM_END_TOKEN,
+        IMAGE_PLACEHOLDER,
+    )
+except:
+    pass
 import csv
 from utils.ai2thor_utils import generate_program_from_roomjson, format_program, generate_attribute_program_from_roomjson
 
@@ -326,6 +331,31 @@ def interleave_iterators(*iterators):
             except StopIteration:
                 finished[i] = True
         stop_cond = functools.reduce(lambda x,y:not x or not y,finished)
+
+def format_prompt(image, question, answer, answer_choices, model_choice, mode, **kwargs):
+    
+    image_order = [image,]
+    
+    correct_answer = answer_choices[0]
+        
+    ans_choice_order = answer_choices
+    ans_choice_order = ['"'+ans+'"' for ans in ans_choice_order]
+    random.shuffle(ans_choice_order)
+    answer_choices_format = " or ".join(ans_choice_order)
+    
+    image_prompt_format = "<image>"*len(image_order)
+
+    if model_choice=="llava":
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        if mode == "train":
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n {correct_answer} \n###"
+            text_label = prompt
+        else:
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n" 
+            text_label = prompt + correct_answer + " \n###"
+    
+    return image_order, images, prompt, text_label, correct_answer, answer_choices, f"procthor_reasoning_{question_type}"
+
 
 def get_inputs_for_model(imgs, prompts, tokenizer=None, image_processor=None, model_choice=None):
 
@@ -625,6 +655,12 @@ class CustomMix(Dataset):
             self.weights.append(mix_datas["spoc_easyobjnav"])
             self.all_lens.append(len(self.spoc_easyobjnav))
         
+        if 'robopoint' in mix_datas:
+            self.robopoint = RoboPointDataset(args, tokenizer, image_processor)
+            self.all_mix.append(self.robopoint)
+            self.weights.append(mix_datas["robopoint"])
+            self.all_lens.append(len(self.robopoint))
+        
         print("combined data ...")
 
         print("Total number of data points: ", sum(self.all_lens))
@@ -825,6 +861,318 @@ class VSR_VRD25D(Dataset):
         }
 
         return return_dict
+
+class GQASpatial_OG_QA(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+
+        gqa_qa = json.load(open("/projectnb/ivc-ml/array/data/GQA/val_balanced_questions.json"))
+        gqa_im_path = "/projectnb/ivc-ml/array/data/GQA/images/"
+
+        qa_data = []
+        for qaid in gqa_qa:
+            entry = gqa_qa[qaid]
+            if entry['types']['semantic'] == 'rel':
+                img_id = entry["imageId"]
+                question = entry["question"]
+                answer = entry["answer"]
+                image_path = os.path.join(gqa_im_path, f"{img_id}.jpg")
+
+                qa_data.append((image_path, question, answer))
+        
+        self.data = qa_data[:args.get("num_data_points", 10000)]
+    
+    def __getitem__(self, idx):
+        im_file, question, answer = self.data[idx]
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n "
+        text_labels = prompt + answer + " \n###" 
+
+        img = [Image.open(im_file).convert("RGB"),]       
+
+        return [im_file,], img, prompt, text_labels, answer, [answer,], "gqa_spatial_ogqa"
+
+
+    def __len__(self):
+        return len(self.data)
+    
+    def collate_fn(self, batch):
+        
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
+
+
+
+class CocoSpatialDataset(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        """
+        Initializes the CocoDataset with the root directory of the dataset and the annotation file.
+        
+        dataset_root: The root directory where the dataset is stored.
+        annotation_file: The path to the COCO annotations file (JSON format).
+        autoload: Whether to load the dataset automatically. Defaults to False.
+        """
+        self.dataset_root = "/projectnb/ivc-ml/array/data/COCO/images/"
+        self.annotation_file = "https://github.com/kahnchana/locvlm/releases/download/v1.0/coco_spatial.json"
+        self.image_id_list = None
+        self.coco_data = None
+        self.categories = None
+        self.annotations = None
+        autoload = True
+        if autoload:
+            self.load_dataset()
+
+        # make the spatial qas
+        self.data = []
+        for image_id in self.image_id_list:
+            image, annotation = self.get_image_annotations(image_id)
+            image = image.convert("RGB")
+
+            spatial_eval_data = self.generate_spatial_questions(image, annotation)
+            ab_spatial_eval_data = self.generate_up_down_questions(image, annotation)
+
+            self.data.append((image, spatial_eval_data['questions'][0], spatial_eval_data['answers'][0][0], ["left", "right"]))
+            self.data.append((image, ab_spatial_eval_data['questions'][0], ab_spatial_eval_data['answers'][0][0], ["above", "below"]))
+
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+
+    def __len__(self):
+        return len(self.image_id_list)
+
+    def __getitem__(self, index):
+        image, question, answer, answer_choices = self.data[index]
+
+        random.shuffle(answer_choices)
+
+        answer_choice_format = " or ".join([f'"{ans}"' for ans in answer_choices])
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prompt = f"{prefix}###Human: <im_start><image><im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choice_format}. ###Assistant: \n "
+        text_labels = prompt + answer + " \n###" 
+
+        img = [image,]       
+
+        return ["",], img, prompt, text_labels, answer, [answer,], "coco_spatial"
+    
+    def collate_fn(self, batch):
+        
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+        
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
+
+    @property
+    def qa_pair_count(self):
+        """The total number of question-answer pairs in the dataset."""
+        return sum([len(x['good_pairs']) for x in self.annotations.values()])
+
+    def load_dataset(self):
+        """
+        Loads the COCO dataset annotations from the specified JSON file.
+        """
+        if self.annotation_file.startswith('https://'):
+            response = requests.get(self.annotation_file)
+            if response.status_code == 200:
+                self.coco_data = response.json()  # This automatically parses the JSON content
+            else:
+                raise Exception(f"Failed to download JSON file. Status code: {response.status_code}")
+        else:
+            with open(self.annotation_file, 'r') as f:
+                self.coco_data = json.load(f)
+        # Create a mapping from category ID to category name
+        self.categories = {cat['id']: cat['name'] for cat in self.coco_data['categories']}
+        self.annotations = self.coco_data['data']
+        self.image_id_list = list(self.annotations.keys())
+
+    def get_image_annotations(self, image_id):
+        """
+        Retrieves the image and its annotations given an image ID.
+        
+        image_id: The ID of the image to retrieve.
+
+        Return: 
+            A tuple (image, annotations) where `image` is a PIL image object,
+            `annotations` is a list of bounding boxes and category IDs for the given image.
+        """
+        # Find the image information by image ID
+        datum = self.annotations[image_id]
+        
+        image_path = f'{self.dataset_root}/val2014/{datum["file_name"]}'
+        image = Image.open(image_path)
+        
+        # Get the annotations for the given image ID
+        annotations = datum['annotations']
+        good_pairs = datum['good_pairs'] if 'good_pairs' in datum else None
+        data = {'annotation': annotations, 'good_pairs': good_pairs}
+        
+        return image, data
+
+    def visualize_image(self, image, annotations, font_path=None, font_size=25):
+        """
+        Visualizes the image by drawing bounding boxes and category labels on it.
+        
+        :param image: The PIL image object to visualize.
+        :param annotations: A list of annotations with bounding boxes and category IDs.
+        :param font_path: The path to the font file for rendering text. Defaults to "arial.ttf" if available.
+        :param font_size: The font size to use for the text.
+        """
+        vis_image = image.copy()
+        draw = ImageDraw.Draw(vis_image)
+
+        if isinstance(annotations, dict):
+            annotations = annotations['annotation']
+
+        # Load the font for text labels
+        try:
+            font = ImageFont.truetype(font_path or "arial.ttf", font_size)
+        except IOError:
+            font = ImageFont.load_default()
+
+        # Loop through each annotation and draw the bounding box and label
+        for ann in annotations:
+            bbox = ann['bbox']  # [x, y, width, height]
+            x, y, width, height = bbox
+            category_id = ann['category_id']
+            category_name = self.categories[category_id]
+
+            # Draw the bounding box
+            draw.rectangle([x, y, x + width, y + height], outline='green', width=3)
+
+            # Draw the category label
+            text_position = (x, y)
+            draw.text(text_position, category_name, fill="red", font=font)
+
+        return vis_image
+
+    def generate_spatial_questions(self, image, annotation):
+        flipped_image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        object_list = [self.categories[x['category_id']] for x in annotation['annotation']]
+        object_pairs = annotation['good_pairs']
+
+        question_list = []
+        answer_list = []
+        for (obj_left, obj_right) in object_pairs:
+            name_left = object_list[obj_left]
+            name_right = object_list[obj_right]
+            question = f"Which side of the {name_left} is the {name_right}?"
+            # correct and wrong answers respectively
+            answers = [
+                f"The {name_right} is on the right side of the {name_left}.",
+                f"The {name_right} is on the left side of the {name_left}.",
+            ]
+            question_list.append(question)
+            answer_list.append(answers)
+        
+        return {
+            'image': image,
+            'image_flipped': flipped_image,
+            'questions': question_list,
+            'answers': answer_list
+        }
+
+    def generate_up_down_questions(self, image, annotation):
+        flipped_image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        object_list = [self.categories[x['category_id']] for x in annotation['annotation']]
+        object_pairs = annotation['good_pairs']
+
+        question_list = []
+        answer_list = []
+        for (obj_up, obj_down) in object_pairs:
+            name_down = object_list[obj_down]
+            name_up = object_list[obj_up]
+            question = f"Where is the {name_down} relative to the {name_up}?"
+            # Correct and wrong answers respectively.
+            answers = [
+                f"The {name_down} is below the {name_up}.",
+                f"The {name_down} is above the {name_up}.",
+            ]
+            question_list.append(question)
+            answer_list.append(answers)
+
+            question_reversed = f"Where is the {name_up} relative to the {name_down}?"
+            # Correct and wrong answers respectively.
+            answers = [
+                f"The {name_up} is above the {name_down}.",
+                f"The {name_up} is below the {name_down}.",
+            ]
+
+            question_list.append(question_reversed)
+            answer_list.append(answers)
+
+        return {
+            'image': image,
+            'image_flipped': flipped_image,
+            'questions': question_list,
+            'answers': answer_list
+        }
+
+
+    def generate_object_questions(self, annotation):
+        object_list = [self.categories[x['category_id']] for x in annotation['annotation']]
+        question_list = []
+        answer_list = []
+        for obj_name in object_list:
+            if obj_name.startswith(tuple("aeiou")):
+                question = f"Is there an {obj_name} in the image?"
+                # correct and wrong answers respectively
+                answer = [
+                    f"Yes, there is a {obj_name} in the image.",
+                    f"No, there is no {obj_name} in the image.",
+                ]
+            else:
+                question = f"Is there a {obj_name} in the image?"
+                # correct and wrong answers respectively
+                answer = [
+                    f"Yes, there is a {obj_name} in the image.",
+                    f"No, there is no {obj_name} in the image.",
+                ]
+            
+            question_list.append(question)
+            answer_list.append(answer)
+        
+        return {
+            'questions': question_list,
+            'answers': answer_list
+        }
 
 
 class GQASpatial(Dataset):
@@ -1090,9 +1438,60 @@ def get_qa_type(question):
     if 'if i move to the' in question.lower() or "for someone at the" in question.lower():
         question_type = "perspective"
 
-    
     return question_type
 
+
+class RealSATDynamic(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor 
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode
+
+        self.data = json.load(open("/projectnb/ivc-ml/array/data/SAT/realDynamic/SATDynamicReal.json"))
+        
+    
+    def __getitem__(self, idx):
+        images, question, answer, distractor, datatype = self.data[idx]
+
+        correct_answer = answer
+        answer_choices = [answer, distractor]
+        random.shuffle(answer_choices)
+        
+        answer_choices_format = " or ".join([f'"{ans}"' for ans in answer_choices])
+
+        image_prompt_format = "<image>"*len(["im" for im in images if im!=""])
+
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n" 
+        text_label = prompt + correct_answer + " \n###"
+
+        imgs = [Image.open(im_file).convert("RGB") for im_file in images if im_file!=""]
+
+        return images, imgs, prompt, text_label, correct_answer, answer_choices, "realsat_"+datatype
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
 
 
 class ProcTHOR_reasoning(Dataset):
@@ -1120,7 +1519,11 @@ class ProcTHOR_reasoning(Dataset):
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_v2.json' # remove v2 for prev version.
                 complex_qa_json_path_split2 = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_train_v2_split2.json'
                 complex_data = json.load(open(complex_qa_json_path)) + json.load(open(complex_qa_json_path_split2))
-                complex_data = random.sample(complex_data, args.get("num_complex", 4500)) # just to keep proportions similar to other kinds of spatial data
+                
+                # complex_data = random.sample(complex_data, args.get("num_complex", 6900)) # just to keep proportions similar to other kinds of spatial data
+                camera_move_path = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_cameramove_qas_train.json"
+                camera_move_data = json.load(open(camera_move_path))
+
             else:
                 complex_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/3d_navigation_qas_val_v2.json'
                 complex_data = json.load(open(complex_qa_json_path))
@@ -1132,7 +1535,7 @@ class ProcTHOR_reasoning(Dataset):
             if args.get("split") == "train":
                 perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas.json'
                 perspective_data = json.load(open(perspective_qa_json_path))
-                perspective_data = random.sample(perspective_data, args.get("num_perspective", 4500)) # just to keep proportions similar to other kinds of spatial data
+                # perspective_data = random.sample(perspective_data, args.get("num_perspective", 4500)) # just to keep proportions similar to other kinds of spatial data
             else:
                 perspective_qa_json_path = '/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/procThor/perspective_qas_val.json'
                 perspective_data = json.load(open(perspective_qa_json_path))
@@ -1145,12 +1548,14 @@ class ProcTHOR_reasoning(Dataset):
 
         self.data = []
         if args.get("split") == "train":
+            print("Adding training data")
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[:int(len(nav_data)*0.8)]:
             #    self.data.extend(qa_entries)
             if not args.get("complex_only"):
                 for house_ind, cam_pos, cam_rot, qa_entries in spatial_data:
                     self.data.extend(qa_entries)
-            
+            print("Length of basic data: ", len(self.data))
+
             if args.get("add_complex"):
                 for house_ind, cam_pos, cam_rot, qa_entries in complex_data:
                     for question, im_order, answers in qa_entries:
@@ -1160,18 +1565,32 @@ class ProcTHOR_reasoning(Dataset):
                             new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
                             answers = new_answers
                         
+                        if "how did the camera likely move" in question.lower():
+                            question = question.replace("How did the camera likely move when shooting the video", "How did the camera rotate from the first image to the second image") # fix this bug in generation later.
+                            if self.args.get("skip rotate"):
+                                continue
+                            # if random.random()<0.7:
+                            #    continue # too many of these QAs 
+
                         self.data.append((question, im_order, answers))
-                
+                for _,_,_, qa_entries in camera_move_data:
+                    
+                    self.data.extend(qa_entries)
+
+                print("Length after adding complex data: ", len(self.data))
                 if args.get("add_perspective"):
                     for _,_,_, qa_entries in perspective_data:
                         for question, im_order, answers in qa_entries:
+                            if random.random() > args.get("perspective_prob", 0.05):
+                                continue # too many of these QAs.
+
                             question = question.replace("turned towards the", "facing 90 degrees to the")
                             question = question.replace("turned right", "turned right by 90 degrees")
                             question = question.replace("turned left", "turned left by 90 degrees")
 
                             self.data.append((question, im_order, answers))
                         # pdb.set_trace()
-
+                    print("Length after adding perspective data: ", len(self.data))
         elif args.get("split") == "valtrain":
             #for house_ind, cam_pos, cam_rot, qa_entries in nav_data[int(len(nav_data)*0.8):int(len(nav_data)*0.9)]:
             #    self.data.extend(qa_entries)
@@ -1187,6 +1606,9 @@ class ProcTHOR_reasoning(Dataset):
                         if answers[0] == "rotated left and rotated right" or answers[0] == "rotated right and rotated left": # bug fix
                             new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
                             answers = new_answers
+
+                        if "how did the camera likely move" in question.lower():
+                            question = question.replace("How did the camera likely move when shooting the video", "How did the camera rotate from the first image to the second?") # fix this bug in generation later.
 
                         self.data.append((question, im_order, answers))
                 
@@ -1219,6 +1641,9 @@ class ProcTHOR_reasoning(Dataset):
                             new_answers = ["did not move", random.choice(["rotated left", "rotated right"])]
                             answers = new_answers
                         
+                        if "how did the camera likely move" in question.lower():
+                            question = question.replace("How did the camera likely move when shooting the video", "How did the camera rotate from the first image to the second?") # fix this bug in generation later.
+                        
                         self.data.append((question, im_order, answers))
                         num_complex += 1
 
@@ -1237,6 +1662,11 @@ class ProcTHOR_reasoning(Dataset):
                             break
             print("Basic: ", num_basic, " Complex: ", num_complex, " Perspective: ", num_perspective)
         
+        if args.get("subsample_data"):
+            print("Subsampling data")
+            self.data = random.sample(self.data, args.get("subsample_data"))
+
+
         if args.get("split") != "val":
             random.shuffle(self.data)
         print("Total number of data points: ", len(self.data))
@@ -1247,12 +1677,7 @@ class ProcTHOR_reasoning(Dataset):
         
         question, image_order, answer_choices = qa_entry
 
-        # rephrase a question sometimes (this is hacky, need to add this rephrases to actual data later)
-        if "How did the camera likely move" in question:
-            if random.random() < 0.7:
-                # question = "The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
-                question = "The images are frames from a video. The video is shooting a static scene. The camera is either moving clockwise (left) or counter-clockwise (right) around the object. The first image is from the beginning of the video and the second image is from the end. Is the camera moving left or right move when shooting the video?"
-
+        
         corrected_answer_choices = []
         for answer in answer_choices:
             if "in the first frame" in answer: # a small bug, todo fix in data gemeration later.
@@ -1296,6 +1721,14 @@ class ProcTHOR_reasoning(Dataset):
             else:
                 prompt = f"{image_prompt_format}{question} Choose between the following options: {answer_choices_format} <|im_end|><|im_start|>assistant: \n"
                 text_label = prompt + correct_answer + " <|im_end|>"
+        elif self.args.get("molmo"):
+            prefix = ""
+            if self.args['mode'] == "train":
+                prompt = f"Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n {correct_answer} \n###"
+                text_label = prompt
+            else:
+                prompt = f"Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n" 
+                text_label = prompt + correct_answer + " \n###"
                 
         else:
             if self.args['prompt_mode'] == "zero_shot":
@@ -1332,8 +1765,12 @@ class ProcTHOR_reasoning(Dataset):
             else:
                 prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
                 if self.args['mode'] == "train":
-                    prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n {correct_answer} \n###"
-                    text_label = prompt
+                    if self.args.get("knowledge_injection_mode"):
+                        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n {correct_answer} \n###"
+                        text_label = prompt
+                    else:
+                        prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n {correct_answer} \n###"
+                        text_label = prompt
                 else:
                     prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. Choose between the following options: {answer_choices_format}.###Assistant: \n" 
                     text_label = prompt + correct_answer + " \n###"
@@ -1364,6 +1801,15 @@ class ProcTHOR_reasoning(Dataset):
                 "answers": answers,
                 "answer_choices": answer_choices,
             }
+        elif self.args.get("molmo"):
+            imgs = []
+            for img in images_batch:
+                for im in img:
+                    imgs.append(im)
+            inputs = self.molmo_processor.process(
+                images=imgs,
+                text=prompts,
+            )
         else:
             pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
             # pdb.set_trace()
@@ -1380,6 +1826,79 @@ class ProcTHOR_reasoning(Dataset):
             }
 
         return return_dict
+
+
+class RoboPointDataset(Dataset):
+    def __init__(self, args, tokenizer, image_processor):
+        self.args = args
+        self.tokenizer = tokenizer
+        self.image_processor = image_processor
+        if tokenizer is not None:
+            self.batch_decode = self.tokenizer.batch_decode        
+
+        llava_format_data = json.load(open("/projectnb/ivc-ml/array/data/Robopoint/robopoint_1432k.json"))
+        
+        self.image_path = "/projectnb/ivc-ml/array/data/Robopoint/images"
+        self.data = []
+        for entry in tqdm.tqdm(llava_format_data):
+            im_path = entry.get('image')
+
+            # pdb.set_trace()
+            if im_path is None:
+                continue
+
+            if not os.path.exists(os.path.join(self.image_path, im_path)):
+                continue
+            
+            if len(entry['conversations'])%2!=0:
+                continue
+
+            for question, answer in zip(entry['conversations'][::2], entry['conversations'][1::2]):
+                self.data.append(([os.path.join(self.image_path, im_path),], question['value'], answer['value']))
+
+        print("length of robopoint data: ", len(self.data))
+
+    def __getitem__(self, idx):
+        image_order, question, correct_answer = self.data[idx]
+
+        image_prompt_format = "<image>"*len(image_order)
+
+        question = question.replace("<image>", "")
+        
+        prefix = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+        if self.args['mode'] == "train":
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n {correct_answer} \n###"
+            text_label = prompt
+        else:
+            prompt = f"{prefix}###Human: <im_start>{image_prompt_format}<im_end> \nHuman: Answer in natural language. {question} Answer the question using a single word or phrase. ###Assistant: \n" 
+            text_label = prompt + correct_answer + " \n###"
+
+        images = [Image.open(img).convert("RGB") for img in image_order]
+
+        return image_order, images, prompt, text_label, correct_answer, [correct_answer,], f"robopoint"
+    
+    def __len__(self):
+        return len(self.data)
+
+    def collate_fn(self, batch):
+        image_paths, images_batch, prompts, text_labels, answers, answer_choices, datanames = zip(*batch)
+
+        pixel_values, input_ids, attention_mask =  get_inputs_for_model(images_batch, prompts, self.tokenizer, self.image_processor, model_choice="llava")
+        # pdb.set_trace()
+        return_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            'pixel_values': pixel_values,
+            "labels": input_ids,
+            "prompts": prompts,
+            "text_labels": text_labels,
+            "dataset": datanames,
+            "answers": answers,
+            "answer_choices": answer_choices,
+        }
+
+        return return_dict
+
 
 class ProcTHOR_recon_qa(Dataset):
     def __init__(self, args, tokenizer, image_processor):
@@ -2770,8 +3289,8 @@ class BLINK(Dataset):
         answer = entry['choices'][self.choice_to_number[answer]]
 
         if "The video is shooting a static scene. The camera is either moving clockwise" in question:
-            answer_choices = ["rotated "+x for x in entry['choices']]
-            answer = "rotated "+answer
+            answer_choices = ["moved "+x for x in entry['choices']]
+            answer = "moved "+answer
             choice_format = ", ".join(answer_choices[:-1]) + ", or "+answer_choices[-1]
         else:    
             choice_format = ", ".join(entry['choices'][:-1]) + ", or "+entry['choices'][-1]

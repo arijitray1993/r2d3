@@ -101,8 +101,8 @@ def compute_metrics_from_json(json_file, logger):
 
 if __name__=="__main__":
     
-    #json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses_randomobjpoint_updated.json"
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_randompointrecon/output.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses/molmo_complexreasoning_response.json"
+    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_reasoning_randompointrecon/output.json"
 
     exp_name = json_file.split('/')[-2]
     wandb.login()

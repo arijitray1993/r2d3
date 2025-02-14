@@ -388,7 +388,7 @@ if __name__ == "__main__":
                 qa_pair_choices.append((question, image_seq, answer_choices))
                 
                 # question about the simple actions taken in the sequence of images
-                question = "The first image is from the beginning of the video and the second image is from the end. How did the camera likely move when shooting the video?"
+                question = "The first image is from the beginning of the video and the second image is from the end. How did the camera likely rotate when shooting the video?"
                 answer_choices = [simple_action, simple_wrong_action]
                 # pdb.set_trace()
                 qa_pair_choices.append((question, image_seq, answer_choices))

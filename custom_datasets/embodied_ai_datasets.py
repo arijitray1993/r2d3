@@ -34,22 +34,26 @@ import wandb
 
 import sys
 # sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/models/LLaVA")
-sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
-# sys.path.append("models/LLaVA_modified/LLaVA")
-from llava.mm_utils import (
-    process_images,
-    tokenizer_image_token,
-    get_model_name_from_path,
-    KeywordsStoppingCriteria,
-)
-from llava.mm_utils import expand2square
-from llava.constants import (
-    IMAGE_TOKEN_INDEX,
-    DEFAULT_IMAGE_TOKEN,
-    DEFAULT_IM_START_TOKEN,
-    DEFAULT_IM_END_TOKEN,
-    IMAGE_PLACEHOLDER,
-)
+
+try:
+    sys.path.append("/projectnb/ivc-ml/array/research/robotics/LLaVA")
+    # sys.path.append("models/LLaVA_modified/LLaVA")
+    from llava.mm_utils import (
+        process_images,
+        tokenizer_image_token,
+        get_model_name_from_path,
+        KeywordsStoppingCriteria,
+    )
+    from llava.mm_utils import expand2square
+    from llava.constants import (
+        IMAGE_TOKEN_INDEX,
+        DEFAULT_IMAGE_TOKEN,
+        DEFAULT_IM_START_TOKEN,
+        DEFAULT_IM_END_TOKEN,
+        IMAGE_PLACEHOLDER,
+    )
+except:
+    pass
 import csv
 
 

@@ -11,6 +11,7 @@ from PIL import Image
 import cv2
 import re
 import tqdm
+import numpy as np
 
 import sys
 sys.path.append("/projectnb/ivc-ml/array/research/robotics/dreamworlds/custom_datasets/")
@@ -81,6 +82,7 @@ if __name__=="__main__":
 
     dataset = AllMLMBench(args, tokenizer=None, image_processor=None)
 
+    '''
     with open("GPT4_responses_mlmBench.json") as f:
         gpt4_responses = json.load(f)
 
@@ -101,12 +103,22 @@ if __name__=="__main__":
         json.dump(gpt4_responses, f)
 
     sys.exit()
+    '''
 
     all_responses = []
     for entry in tqdm.tqdm(dataset):
         images, prompt, text_label, correct_answer, datatype = entry
 
-        prompt = prompt.split("###Human: <im_start><image><im_end> \nHuman: Answer in natural language. ")[-1].split("###Assistant: \n")[0]
+        if len(images)>1:
+          print("concatenating images")
+          # join the images into one
+          opencv_image_a = cv2.cvtColor(np.array(images[0]), cv2.COLOR_RGB2BGR)
+          opencv_image_b = cv2.cvtColor(np.array(images[1]), cv2.COLOR_RGB2BGR)
+          image = cv2.hconcat([opencv_image_a, opencv_image_b])
+          image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+          images = [image,]
+
+        prompt = prompt.split("Human: Answer in natural language.")[-1].split("###Assistant")[0]
         prompt += " Please answer just one of the options and no other text."
         # pdb.set_trace()
         response = get_caption(images[0], prompt, api_key)
@@ -115,13 +127,17 @@ if __name__=="__main__":
         
         print("Prompt: ", prompt)
         print(response_text)
+
+        # pdb.set_trace()
+
         # Save the response
         all_responses.append({
           "prompt": prompt,
           "text_label": text_label,
-          "answer": correct_answer,
           "image_path": "",
           "response": response_text,
+          "answer": correct_answer,
+          "answer_choices": [correct_answer,],
           "dataset": datatype
         })
         # pdb.set_trace()

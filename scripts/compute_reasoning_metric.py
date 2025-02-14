@@ -39,7 +39,7 @@ def get_qa_type(question):
 
 
 
-def compute_metrics_from_json_gpt_reconqa(json_file, logger):
+def compute_metrics_from_json_gpt(json_file, logger):
 
     data = json.load(open(json_file))
     print("Number of samples: ", len(data))
@@ -59,6 +59,7 @@ def compute_metrics_from_json_gpt_reconqa(json_file, logger):
         question_type = get_qa_type(question)
         question_type_count[question_type] += 1
 
+        
         entry_dict = {
             'dataset': ["procthor_reasoning_"+question_type,],
             'prompts': [entry['prompt'],],
@@ -71,7 +72,45 @@ def compute_metrics_from_json_gpt_reconqa(json_file, logger):
     
 
     # Compute the metrics
-    # accs.compute()
+    accs.compute()
+
+    print("====================")
+    print(question_type_count)
+    print("Number of samples: ", len(data))
+
+
+def compute_mlmbench_metrics_from_json_gpt(json_file, logger):
+
+    data = json.load(open(json_file))
+    print("Number of samples: ", len(data))
+    # initialize metrics
+    args = {}
+    args['logger'] = logger
+    args['exp_name'] = json_file.split('/')[-1].split('.')[0]
+    accs = eval_funcs.QAAccuracy(args)
+
+    question_type_count = defaultdict(int)
+    for entry in data:
+        # pdb.set_trace()
+        
+        response_text = entry['response']
+
+        question = entry['prompt']
+        
+        
+        entry_dict = {
+            'dataset': [entry['dataset'],],
+            'prompts': [entry['prompt'],],
+            'answers': [entry['answer'],],
+            'answer_choices': [entry['answer_choices'],],
+        }
+        # compute metrics
+        accs.update([response_text,], entry_dict)
+        
+    
+
+    # Compute the metrics
+    accs.compute()
 
     print("====================")
     print(question_type_count)
@@ -149,17 +188,22 @@ def compute_metric_robopoint(jsonl_file, logger):
 
 if __name__=="__main__":
     
-    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/GPT4_complexreasoning_response.json"
-    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_VSR25/output.json"
+    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses/molmo_complexreasoning_response.json"
+    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses/llavaov_complexreasoning_response.json"
+    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses/gemini_responses_mlmBench.json"
+    json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/scripts/GPT4_zero_shot_exps/responses/molmo_realsat_response.json"
+    # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/llava_mixdata_IT_VSR25/output.json"
     # json_file = "/projectnb/ivc-ml/array/research/robotics/dreamworlds/checkpoints/robopoint/results.jsonl"
-    exp_name = json_file.split('/')[-2].split('.')[0]
+    exp_name = json_file.split('/')[-1].split('.')[0]
     wandb.login()
     run = wandb.init(project=exp_name)
     logger = run
     
     # compute_metric_robopoint(json_file, logger)
-    compute_metrics_from_json(json_file, logger)
-    # compute_metrics_from_json_gpt_reconqa(json_file, logger)
+    # compute_metrics_from_json(json_file, logger)
+    compute_mlmbench_metrics_from_json_gpt(json_file, logger)
+    # compute_metrics_from_json_gpt(json_file, logger)
+    
 
     # compute_image_caption_metrics(json_file, logger, eval_caption_sim=False)
     
